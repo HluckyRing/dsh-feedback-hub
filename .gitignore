@@ -1,0 +1,46 @@
+# ============================================================
+# .gitignore —— 隐私与敏感信息防线
+# 按用途分组；被忽略的内容一律不得进入版本库。
+# ============================================================
+
+# ---------- 依赖与构建产物 ----------
+node_modules/
+dist/
+coverage/
+*.tmp
+_probe/
+
+# ---------- 本工作区跨会话记忆（含私人对话摘要，绝不可入库） ----------
+.dsh-memory/
+.dsh-memory
+
+# ---------- 本地私有笔记 ----------
+*.local.md
+AGENTS.local.md
+CLAUDE.local.md
+
+# ---------- 密钥 / 环境变量 ----------
+.env
+.env.*
+*.env
+*.local
+*.key
+*.pem
+*.p12
+*.crt
+secrets.json
+credentials.json
+
+# ---------- 系统与编辑器 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# ---------- 日志 ----------
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 提交前自查：绝不提交任何明文令牌、Webhook URL、个人路径

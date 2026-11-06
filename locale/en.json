@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Feedback hub",
+    "description": "Notifies you when the agent needs authorization, asks a question, or finishes a task: desktop alerts, in-app toasts and an unread bell."
+  }
+}

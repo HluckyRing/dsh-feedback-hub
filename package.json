@@ -1,0 +1,63 @@
+{
+  "name": "dsh-feedback-hub",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness notifications: desktop alerts, in-app toasts and an unread bell whenever the agent needs your authorization, asks a question, or finishes a task.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "notifications",
+    "toast",
+    "productivity"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./core": "./core.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "core.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "check:syntax": "node --check index.js && node --check client.js && node --check core.js",
+    "check:secrets": "node .githooks/check-secrets.mjs",
+    "check": "npm run check:syntax && npm run check:secrets && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HluckyRing/dsh-feedback-hub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HluckyRing/dsh-feedback-hub/issues"
+  },
+  "homepage": "https://github.com/HluckyRing/dsh-feedback-hub#readme",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  }
+}

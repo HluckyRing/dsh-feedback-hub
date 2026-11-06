@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="反馈中心：铃铛与反馈波纹">
+  <defs>
+    <linearGradient id="fb-bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F1F5FF"/>
+      <stop offset="1" stop-color="#DCE6FF"/>
+    </linearGradient>
+    <linearGradient id="fb-bell" x1="23" y1="17.5" x2="41" y2="41.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6C93FF"/>
+      <stop offset="1" stop-color="#3F6BE8"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#fb-bg)"/>
+  <g fill="none" stroke="#4F7CFF" stroke-width="2.8" stroke-linecap="round" opacity="0.55">
+    <path d="M13.5 26 C11 29.5 11 35 13.5 38.5"/>
+    <path d="M18 29 C16.5 31 16.5 34 18 36"/>
+    <path d="M50.5 26 C53 29.5 53 35 50.5 38.5"/>
+    <path d="M46 29 C47.5 31 47.5 34 46 36"/>
+  </g>
+  <path d="M32 17.5 C27 17.5 23 21.6 23 26.8 V33.8 C23 36.8 21.6 39.4 19.4 41.8 H44.6 C42.4 39.4 41 36.8 41 33.8 V26.8 C41 21.6 37 17.5 32 17.5 Z" fill="url(#fb-bell)"/>
+  <circle cx="32" cy="13.6" r="2.4" fill="#4F7CFF"/>
+  <rect x="17.6" y="41.2" width="28.8" height="3.4" rx="1.7" fill="#4F7CFF"/>
+  <circle cx="32" cy="49" r="3.2" fill="#F5A524"/>
+</svg>

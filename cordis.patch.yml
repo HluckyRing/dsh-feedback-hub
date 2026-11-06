@@ -1,0 +1,36 @@
+# dsh-feedback-hub — Host 半 + Client 半的安装行。
+#
+# 这一行由 `plugin_manager` 的 install_bundle 插入当前 profile；
+# 下面的 config 就是默认配置，改完保存即可（改普通字段会重载插件）。
+- insert:
+    - id: dsh-feedback-hub
+      name: dsh-feedback-hub
+      config:
+        # 每个事件一个开关。turn-done 是「本轮任务完成」。
+        events:
+          approval: true
+          question: true
+          turn-done: true
+          error: true
+          subagent-end: false
+          workflow-end: false
+        # 只有跑满这么久的回合才提醒「任务完成」，避免每轮都响。0 = 每轮都提醒。
+        turnDoneMinDurationMs: 60000
+        # 静音时段，例如 "23:00-08:00" 或 "12:00-13:30,18:00-19:00"；空串 = 不启用。
+        quietHours: ''
+        # 同一事件在这个窗口内只提醒一次（毫秒）。
+        dedupeWindowMs: 5000
+        # 系统通知由谁弹：auto | client | host | off
+        #   auto   页面在线且已授权时由页面弹（能感知窗口是否聚焦）；否则 Host 兜底
+        #   client 只由页面弹（不启动任何外部进程）
+        #   host   始终由 Host 弹（页面完全不参与，最保守）
+        #   off    不弹系统通知，只保留应用内浮窗
+        osToast: auto
+        # 应用内提示音。
+        sound: true
+        # Windows 通知的 AppUserModelID；默认就是 DSH 桌面端的身份。
+        toastAppId: com.deepseek.dsh
+        # 应用内浮窗停留时长（毫秒）。
+        toastDurationMs: 8000
+        # Host 内存中保留的通知条数（不落盘）。
+        historyLimit: 100
