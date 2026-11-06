@@ -1,0 +1,177 @@
+# dsh-feedback-hub · DSH 通知中心
+
+> 让 DeepSeek Harness 在**需要你授权**、**等你回答**、**任务跑完**、**出错**时主动提醒你 —— 不用一直盯着窗口。
+> 系统通知（Windows）/ 应用内浮窗 / 侧边栏铃铛未读数 / 提示音，四条反馈通道自动协同，窗口最小化或隐藏到托盘时照样收得到。
+
+[![license: MIT](https://img.shields.io/badge/license-MIT-4F7CFF.svg)](LICENSE)
+[![dsh plugin](https://img.shields.io/badge/dsh-plugin-0.1.0-F5A524.svg)](https://github.com/HluckyRing/dsh-feedback-hub)
+
+---
+
+## 它解决什么问题
+
+DSH 在后台跑长任务时，你切去做了别的事。两种时刻最容易空等：
+
+1. **它卡在等你** —— 工具调用需要授权、代理通过 `ask_user_question` 问你一个问题；
+2. **它已经跑完了** —— 回合结束、子代理结束、报错退出。
+
+本插件把这两类时刻变成可感知的反馈：屏幕右下角弹系统通知 + 提示音，应用里留下浮窗和未读数，点一下直接跳回对应会话。
+
+## 功能
+
+| 能力 | 说明 |
+|---|---|
+| 6 类事件 | 授权请求、代理提问、回合完成、出错、子代理结束、工作流结束（后两个默认关） |
+| 四条通道 | Windows 系统通知 / 应用内浮窗 / 提示音 / 侧边栏铃铛未读数 |
+| 自动兜底 | 页面在线且已授权 → 页面负责弹；页面不在或无权限 → Host 直接弹系统通知 |
+| 只在不打扰时打扰 | 默认「窗口聚焦只弹浮窗，失焦/隐藏才弹系统通知」；回合完成默认只提醒跑满 60s 的 |
+| 静音时段 | `quietHours: "23:00-08:00"`，跨午夜也支持 |
+| 去重窗口 | 同一事件 5s 内只提醒一次，避免重试/重复派发刷屏 |
+| 一键跳转 | 点浮窗、点通知、点铃铛里的条目 → 打开对应会话 |
+| 静音 1 小时 | 临时按下所有声音与系统通知，浮窗与历史仍保留 |
+| 设置页 | 设置 → 通知中心：通道状态 + 每种事件的测试按钮 |
+| 零依赖零构建 | 纯 ESM + 浏览器原生能力，没有 `node_modules`，没有打包步骤 |
+
+## 事件一览
+
+| 事件 | 何时触发 | 默认 |
+|---|---|---|
+| `approval/request` | 工具调用需要你授权 | ✅ |
+| `user-questions/request` | 代理提问 / 计划确认 / 内联审批 | ✅ |
+| `agent/status` → idle | 本轮任务完成（跑满 `turnDoneMinDurationMs` 才提醒） | ✅ |
+| `agent/error` | 步骤或回合出错 | ✅ |
+| `subagent/end` | 子代理结束 | ⬜ |
+| `workflow/end` | 工作流结束 | ⬜ |
+
+两个 waterfall 事件（`approval/request`、`user-questions/request`）本插件**只旁听**：监听器一定 `return next()`，绝不改变谁被问到、也不改变授权结果。
+
+## 安装
+
+### 1. 拿到代码
+
+```bash
+git clone https://github.com/HluckyRing/dsh-feedback-hub.git
+cd dsh-feedback-hub
+```
+
+也可以直接把仓库放到任意目录 —— DSH 以**本地目录**方式安装，`install_bundle` 会链接这个 checkout，不需要发布到 npm。
+
+### 2. 安装到当前 profile
+
+在 DSH 里让 agent 执行（或按你自己的插件安装流程操作）：
+
+```
+plugin_manager(action: "install_bundle", target: "D:\\path\\to\\dsh-feedback-hub")
+```
+
+安装成功后，profile 的 `cordis.patch.yml` 里会多出：
+
+```yaml
+- id: dsh-feedback-hub
+  name: 'dsh-feedback-hub'
+  config: { ... }
+```
+
+### 3. 验收
+
+打开 **设置 → 通知中心**，点「测试 · 测试通知」：
+
+- 应当立刻出现右上角浮窗 + 提示音；
+- 把窗口最小化或切走，再点一次，应当弹 Windows 系统通知。
+
+### 4. 启用密钥守卫（推荐）
+
+```bash
+git config core.hooksPath .githooks
+node .githooks/check-secrets.mjs   # 手动自查，退出码 0 才算干净
+```
+
+## 配置
+
+默认配置已写进 `cordis.patch.yml`。改完保存即可 —— 普通字段变更会重载插件。完整说明见 [docs/CONFIG.md](docs/CONFIG.md)。
+
+```yaml
+- id: dsh-feedback-hub
+  name: 'dsh-feedback-hub'
+  config:
+    events:
+      approval: true
+      question: true
+      turn-done: true
+      error: true
+      subagent-end: false
+      workflow-end: false
+    turnDoneMinDurationMs: 60000   # 0 = 每轮完成都提醒
+    quietHours: ''                 # "23:00-08:00" / "12:00-13:30,18:00-19:00"
+    dedupeWindowMs: 5000
+    osToast: auto                  # auto | client | host | off
+    sound: true
+    toastAppId: com.deepseek.dsh
+    toastDurationMs: 8000
+    historyLimit: 100
+```
+
+## 后台 / 最小化 / 托盘下的行为
+
+| 你的窗口状态 | 你会收到 |
+|---|---|
+| 窗口可见且聚焦 | 应用内浮窗 + 提示音 |
+| 窗口可见但被挡住 / 最小化 | 浮窗（切回来能看到）+ 系统通知 + 提示音 |
+| 窗口隐藏到托盘（点了 ✕） | 系统通知 + 提示音；浮窗与未读数在重新打开窗口后补显 |
+| 页面崩溃 / 通知权限被拒 | Host 兜底直接弹系统通知（`osToast: auto` 时） |
+| DSH 完全退出 | 不会通知 —— 此时任务也已停止 |
+
+> DSH 桌面端关窗口 = **隐藏到托盘，任务继续运行**（官方提示原文：“正在运行的任务不会中断，可在系统托盘中重新打开窗口”）。所以关掉窗口并不会让通知失效。
+
+## 隐私与安全
+
+- **只搬运通知元数据**：事件类型、会话标题、工具名、授权/提问的原因、运行时长、错误摘要。
+  **不读取、不转发对话正文**，不保存任何会话内容。
+- **不落盘**：历史只存在 Host 进程内存的环形缓冲里（默认 100 条），重启即清空。
+- **不联网**（v0.1）：没有任何外部请求；预留的 webhook 通道默认关闭且当前版本未实现。
+- **路由安全**：`/dsh-feedback-hub/events` 是只读 SSE；所有 POST 路由要求自定义请求头 `x-dsh-feedback-hub: 1`，这会强制浏览器跨域预检，别的网页无法伪造。
+- **仓库守卫**：`.githooks/check-secrets.mjs` 拦截密钥文件、真实形态的密钥串，以及**本机用户名 / 家目录绝对路径**（规则运行时现算，脚本本身不含个人信息）。
+- 本仓库不包含任何 `.env`、令牌、cookie 或会话记录。
+
+## 已知限制（v0.1）
+
+- **托盘隐藏时点通知不会自动把窗口唤回来** —— 渲染进程无权调 `BrowserWindow.show()`。v0.2 计划让 Host 侧用主进程能力实现。
+- **Windows 专注助手 / 勿扰**会压掉通知横幅与系统音，这是系统级设置；此时通知静默进入通知中心，应用内浮窗与页面提示音仍然有效。
+- **系统通知的提示音由页面合成**（OS toast 设为 silent），避免双响；如果页面音频还没被任何点击解锁，就只剩浮窗而没有声音。
+- Host 兜底 toast 只在 **Windows** 实现（PowerShell + WinRT）；macOS / Linux 只有页面通道。
+- 配置里的开关要做成实时可改需要重启/重载插件（设置页当前是**只读展示** + 测试按钮）。
+
+## 开发
+
+```bash
+npm test              # node test/smoke.mjs，24 项纯逻辑 + 打包不变量检查
+npm run check:syntax  # node --check 三个 JS 文件
+npm run check         # 语法 + 密钥守卫 + 测试
+```
+
+目录结构：
+
+```
+dsh-feedback-hub/
+├─ index.js            # Host 半：事件订阅 → 过滤节流 → SSE / Windows toast
+├─ client.js           # Client 半：SSE → 浮窗 / 铃铛 / 系统通知 / 设置页
+├─ core.js             # 纯函数（配置、静音时段、去重、toast XML/脚本、环形缓冲）
+├─ cordis.patch.yml    # 安装行 + 默认配置
+├─ locale/{en,zh}.json # 插件管理页显示的标题与描述
+├─ icon.svg            # 原创图标（铃铛 + 反馈波纹）
+├─ test/smoke.mjs
+├─ .githooks/          # 密钥 / 个人信息守卫
+└─ docs/               # CONFIG.md、ARCHITECTURE.md
+```
+
+安装方式是**目录链接**，所以改完代码需要重启 DSH 才会加载新的 JS 模块。
+
+## English
+
+`dsh-feedback-hub` is a DeepSeek Harness plugin that tells you when the agent **needs your authorization**, **asks you a question**, **finishes a task**, or **fails**. It combines a Windows desktop toast, an in-app toast stack, an unread bell, and a short chime — and keeps working while the window is minimized or hidden in the tray.
+
+Zero dependencies, zero build step: clone the repo, install it as a local bundle, open **Settings → Notifications**, and hit a test button. All toggles live in the plugin config (`cordis.patch.yml`) and are documented in [docs/CONFIG.md](docs/CONFIG.md).
+
+## 许可证
+
+[MIT](LICENSE) © 2026 HluckyRing
