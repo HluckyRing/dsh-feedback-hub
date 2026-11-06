@@ -1,0 +1,595 @@
+/**
+ * dsh-feedback-hub — Host half.
+ *
+ * Watches the events that mean "the human is needed" or "the work finished",
+ * keeps a bounded in-memory history, pushes it to the Web page over SSE, and
+ * steps in with a Windows toast whenever no page can do the OS-level part.
+ *
+ * Everything here is read-only with respect to the agent loop: listeners on the
+ * `approval/request` and `user-questions/request` waterfalls always call
+ * `next()`, so a notification can never change what the user is asked or how
+ * the request settles.
+ */
+
+import { spawn } from 'node:child_process'
+import { promises as fsp } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import {
+  RingBuffer,
+  buildToastScript,
+  buildToastXml,
+  formatDuration,
+  resolveConfig,
+  shouldDeliver,
+  truncate,
+} from './core.js'
+
+/** Route namespace; all three routes live under it. */
+const ROUTE_PREFIX = '/dsh-feedback-hub'
+
+/** A page reports at least this often; older reports no longer count as a live page. */
+const PRESENCE_TTL_MS = 60_000
+
+/** SSE keep-alive, so proxies and the browser do not consider the stream idle. */
+const SSE_HEARTBEAT_MS = 15_000
+
+/** Never run more than this many PowerShell toasts at once. */
+const MAX_CONCURRENT_TOASTS = 4
+
+const PLATFORM = process.platform
+
+/**
+ * Host-side copy for OS toasts. The in-app UI localizes from the page's own
+ * dictionary; only the fallback channel needs text before a page can decide.
+ */
+const TOAST_TEXT = {
+  zh: {
+    approval: { title: '🔐 需要授权', body: (event) => join([event.toolName, event.reason]) },
+    question: { title: '❓ 等待你的回答', body: (event) => join([event.header, event.question]) },
+    'turn-done': {
+      title: '✅ 任务完成',
+      body: (event) => join([event.sessionTitle, event.durationMs === undefined ? '' : formatDuration(event.durationMs)]),
+    },
+    error: { title: '⚠️ 出错了', body: (event) => join([event.sessionTitle, event.errorMessage]) },
+    'subagent-end': { title: '🧩 子代理结束', body: (event) => join([event.label]) },
+    'workflow-end': { title: '🔀 工作流结束', body: (event) => join([event.label, event.errorMessage]) },
+    test: { title: '🔔 测试通知', body: () => '通知通道正常，你可以继续工作了。' },
+  },
+  en: {
+    approval: { title: '🔐 Authorization needed', body: (event) => join([event.toolName, event.reason]) },
+    question: { title: '❓ Waiting for your answer', body: (event) => join([event.header, event.question]) },
+    'turn-done': {
+      title: '✅ Task finished',
+      body: (event) => join([event.sessionTitle, event.durationMs === undefined ? '' : formatDuration(event.durationMs)]),
+    },
+    error: { title: '⚠️ Something failed', body: (event) => join([event.sessionTitle, event.errorMessage]) },
+    'subagent-end': { title: '🧩 Subagent finished', body: (event) => join([event.label]) },
+    'workflow-end': { title: '🔀 Workflow finished', body: (event) => join([event.label, event.errorMessage]) },
+    test: { title: '🔔 Test notification', body: () => 'The notification channel works.' },
+  },
+}
+
+/** @param {Array<string | undefined>} parts */
+function join(parts) {
+  return parts.filter((part) => typeof part === 'string' && part.trim() !== '').join(' · ')
+}
+
+/** Map a browser locale onto the two dictionaries above. */
+function pickLanguage(locale) {
+  return typeof locale === 'string' && locale.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+}
+
+/** host toast text for one event */
+function toastTextFor(event, locale) {
+  const dictionary = TOAST_TEXT[pickLanguage(locale)]
+  const entry = dictionary[event.kind] ?? dictionary.test
+  return { title: entry.title, body: truncate(entry.body(event), 200) }
+}
+
+/** @param {import('node:http').ServerResponse} res @param {number} status @param {unknown} body */
+function sendJson(res, status, body) {
+  const payload = JSON.stringify(body)
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'content-length': Buffer.byteLength(payload),
+  })
+  res.end(payload)
+}
+
+/** Read and JSON-parse a small request body. Resolves to `undefined` when it is not JSON. */
+async function readJsonBody(req, limitBytes = 32 * 1024) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > limitBytes) return undefined
+    chunks.push(chunk)
+  }
+  if (chunks.length === 0) return {}
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * One process-wide hub. `apply` creates exactly one and disposes it with the
+ * plugin, so no listener, route or timer can outlive the plugin row.
+ */
+class FeedbackHub {
+  /**
+   * @param {import('@deepseek-ai/cordis').Context} ctx
+   * @param {ReturnType<typeof resolveConfig>} settings
+   */
+  constructor(ctx, settings) {
+    this.ctx = ctx
+    this.settings = settings
+    this.buffer = new RingBuffer(settings.historyLimit)
+    this.seen = new Map()
+    this.subscribers = new Set()
+    this.presence = new Map()
+    this.turnStarts = new Map()
+    this.mutedUntil = 0
+    this.activeToasts = 0
+    this.disposers = []
+    this.timers = []
+    this.disposed = false
+  }
+
+  // ---------------------------------------------------------------- lifecycle
+
+  start() {
+    this.track(() => this.ctx.on('approval/request', (req, next) => this.onApproval(req, next)))
+    this.track(() => this.ctx.on('user-questions/request', (request, next) => this.onQuestion(request, next)))
+    this.track(() => this.ctx.on('agent/status', (payload) => this.onAgentStatus(payload)))
+    this.track(() => this.ctx.on('agent/error', (payload) => this.onAgentError(payload)))
+    this.track(() => this.ctx.on('subagent/end', (info) => this.onSubagentEnd(info)))
+    this.track(() => this.ctx.on('workflow/end', (info, result) => this.onWorkflowEnd(info, result)))
+
+    // Routes only exist in a profile that serves a Web GUI.
+    this.track(() =>
+      this.ctx.inject(['webServer'], (scoped) => {
+        scoped.effect(() => this.registerRoutes(scoped), 'dsh-feedback-hub: routes')
+      }),
+    )
+
+    this.timers.push(
+      setInterval(() => this.prunePresence(), SSE_HEARTBEAT_MS).unref?.(),
+      setInterval(() => this.heartbeat(), SSE_HEARTBEAT_MS).unref?.(),
+    )
+  }
+
+  /** Wrap one registration so disposing the plugin disposes it too. */
+  track(register) {
+    try {
+      const dispose = register()
+      if (typeof dispose === 'function') this.disposers.push(dispose)
+    } catch (error) {
+      this.ctx.logger?.('dsh-feedback-hub')?.warn?.(error)
+    }
+  }
+
+  dispose() {
+    if (this.disposed) return
+    this.disposed = true
+    for (const timer of this.timers) clearInterval(timer)
+    this.timers.length = 0
+    for (const dispose of this.disposers.splice(0)) {
+      try {
+        dispose()
+      } catch {
+        // A disposer that throws must not keep the other ones from running.
+      }
+    }
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber.res.end()
+      } catch {
+        // The socket may already be gone.
+      }
+    }
+    this.subscribers.clear()
+    this.presence.clear()
+    this.buffer.clear()
+  }
+
+  // ------------------------------------------------------------------ events
+
+  /** @param {any} req @param {() => Promise<any>} next */
+  onApproval(req, next) {
+    try {
+      this.push({
+        kind: 'approval',
+        sessionId: sessionIdOf(req?.agent),
+        sessionTitle: this.titleOf(req?.agent),
+        toolName: req?.toolName,
+        reason: localized(req?.displayReason) ?? req?.reason,
+      })
+    } catch {
+      // Observing must never disturb the approval flow.
+    }
+    return next()
+  }
+
+  /** @param {any} request @param {() => Promise<any>} next */
+  onQuestion(request, next) {
+    try {
+      const first = request?.questions?.[0]
+      const intent = first?.intent
+      const isApproval = intent?.kind === 'approval' || intent?.kind === 'plan-review'
+      this.push({
+        kind: 'question',
+        sessionId: sessionIdOf(request?.agent),
+        sessionTitle: this.titleOf(request?.agent),
+        header: first?.header,
+        question: localized(intent?.display?.question) ?? first?.question,
+        intentKind: intent?.kind,
+        // A plan review or an inline approval is authorization by another name:
+        // say so instead of asking the user to decode an option list.
+        urgent: isApproval === true,
+      })
+    } catch {
+      // Same rule as approvals: never break the question flow.
+    }
+    return next()
+  }
+
+  onAgentStatus(payload) {
+    const agent = payload?.agent
+    const id = sessionIdOf(agent)
+    if (id === undefined) return
+    if (payload?.status === 'running') {
+      this.turnStarts.set(id, Date.now())
+      return
+    }
+    const startedAt = this.turnStarts.get(id)
+    if (startedAt === undefined) return
+    this.turnStarts.delete(id)
+    this.push({
+      kind: 'turn-done',
+      sessionId: id,
+      sessionTitle: this.titleOf(agent),
+      durationMs: Date.now() - startedAt,
+    })
+  }
+
+  onAgentError(payload) {
+    this.push({
+      kind: 'error',
+      sessionId: sessionIdOf(payload?.agent),
+      sessionTitle: this.titleOf(payload?.agent),
+      errorMessage: messageOf(payload?.error),
+    })
+  }
+
+  onSubagentEnd(info) {
+    this.push({
+      kind: 'subagent-end',
+      sessionId: info?.childSessionId ?? info?.sessionId ?? info?.id,
+      label: info?.name ?? info?.title ?? info?.description ?? info?.provider,
+      errorMessage: messageOf(info?.error ?? info?.failure),
+    })
+  }
+
+  onWorkflowEnd(info, result) {
+    this.push({
+      kind: 'workflow-end',
+      label: info?.name ?? info?.meta?.name ?? 'workflow',
+      errorMessage: messageOf(result?.error),
+    })
+  }
+
+  // -------------------------------------------------------------- delivery
+
+  /**
+   * Normalise, filter and publish one notification.
+   * @param {Record<string, any>} partial
+   * @param {{ force?: boolean }} [options] `force` bypasses toggles, quiet hours,
+   *   dedupe and the minimum turn length (used by the test button).
+   */
+  push(partial, options = {}) {
+    if (this.disposed) return undefined
+    const now = Date.now()
+    const event = { at: now, ...partial }
+    const verdict = options.force
+      ? { deliver: true, quiet: false }
+      : shouldDeliver({ config: this.settings, event, seen: this.seen, now })
+    if (!verdict.deliver) return undefined
+
+    const muted = this.mutedUntil > now
+    const silent = muted || verdict.quiet || this.settings.sound === false
+    const entry = this.buffer.push({ ...event, quiet: verdict.quiet, muted, silent })
+    this.broadcast(entry)
+    this.maybeToast(entry)
+    return entry
+  }
+
+  /** @param {{ seq: number }} entry */
+  broadcast(entry) {
+    if (this.subscribers.size === 0) return
+    const frame = `event: notification\ndata: ${JSON.stringify(entry)}\n\n`
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber.res.write(frame)
+      } catch {
+        this.subscribers.delete(subscriber)
+      }
+    }
+  }
+
+  heartbeat() {
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber.res.write(': ping\n\n')
+      } catch {
+        this.subscribers.delete(subscriber)
+      }
+    }
+  }
+
+  prunePresence() {
+    const now = Date.now()
+    for (const [id, report] of this.presence) {
+      if (now - report.at > PRESENCE_TTL_MS) this.presence.delete(id)
+    }
+  }
+
+  /** The first live page that may raise an OS notification, if any. */
+  livePage() {
+    for (const report of this.presence.values()) {
+      if (report.osNotify === 'granted') return report
+    }
+    return undefined
+  }
+
+  /** Locale most recently reported by a page, used only for fallback toast text. */
+  pageLocale() {
+    let latest
+    for (const report of this.presence.values()) {
+      if (latest === undefined || report.at > latest.at) latest = report
+    }
+    return latest?.locale
+  }
+
+  /**
+   * Windows toast fallback. Runs only when the page cannot raise one itself
+   * (`osToast: host`), or when no page reports notification permission.
+   * @param {any} entry
+   */
+  maybeToast(entry) {
+    const mode = this.settings.osToast
+    if (mode === 'off' || mode === 'client') return
+    if (mode === 'auto' && this.livePage() !== undefined) return
+    this.showWindowsToast(entry)
+  }
+
+  /** @param {any} entry */
+  async showWindowsToast(entry) {
+    if (PLATFORM !== 'win32') return
+    if (this.activeToasts >= MAX_CONCURRENT_TOASTS) return
+    const { title, body } = toastTextFor(entry, this.pageLocale())
+    const xml = buildToastXml({ title, body, silent: entry.silent === true })
+    const script = buildToastScript({ xml, appId: this.settings.toastAppId })
+    const file = path.join(os.tmpdir(), `dsh-feedback-hub-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`)
+
+    this.activeToasts += 1
+    try {
+      await fsp.writeFile(file, script, 'utf8')
+      const child = spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', file],
+        { stdio: 'ignore', windowsHide: true, detached: false },
+      )
+      const done = () => {
+        this.activeToasts = Math.max(0, this.activeToasts - 1)
+        fsp.rm(file, { force: true }).catch(() => {})
+      }
+      child.once('error', done)
+      child.once('close', done)
+      child.unref?.()
+    } catch {
+      this.activeToasts = Math.max(0, this.activeToasts - 1)
+      fsp.rm(file, { force: true }).catch(() => {})
+    }
+  }
+
+  // ------------------------------------------------------------- inspection
+
+  /** Best-effort session title; absent when the title service is not composed. */
+  titleOf(agent) {
+    const session = agent?.session
+    if (session === undefined) return undefined
+    try {
+      const snapshot = this.ctx.get('sessionTitle')?.get?.(session)
+      const title = snapshot?.title
+      return typeof title === 'string' && title.trim() !== '' ? title.trim() : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  // ----------------------------------------------------------------- routes
+
+  /** @param {any} scoped */
+  registerRoutes(scoped) {
+    const disposers = [
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/events`, handler: (req, res) => this.handleEvents(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/snapshot`, handler: (req, res) => this.handleSnapshot(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/presence`, handler: (req, res) => this.handlePresence(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/test`, handler: (req, res) => this.handleTest(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/mute`, handler: (req, res) => this.handleMute(req, res) }),
+    ]
+    return () => {
+      for (const dispose of disposers) dispose()
+    }
+  }
+
+  /** Server-sent events: backlog after `?since=`, then every new notification. */
+  handleEvents(req, res) {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { ok: false, error: 'GET only' })
+      return
+    }
+    const since = Number(new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('since') ?? '0')
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    })
+    res.write('retry: 3000\n\n')
+    for (const entry of this.buffer.since(Number.isFinite(since) ? since : 0)) {
+      res.write(`event: notification\ndata: ${JSON.stringify(entry)}\n\n`)
+    }
+    const subscriber = { res }
+    this.subscribers.add(subscriber)
+    const drop = () => {
+      this.subscribers.delete(subscriber)
+    }
+    req.on('close', drop)
+    req.on('error', drop)
+  }
+
+  handleSnapshot(req, res) {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { ok: false, error: 'GET only' })
+      return
+    }
+    const since = Number(new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('since') ?? '0')
+    sendJson(res, 200, {
+      ok: true,
+      platform: PLATFORM,
+      cursor: this.buffer.nextSeq - 1,
+      items: this.buffer.since(Number.isFinite(since) ? since : 0),
+      mutedUntil: this.mutedUntil,
+      config: {
+        events: this.settings.events,
+        turnDoneMinDurationMs: this.settings.turnDoneMinDurationMs,
+        quietHours: this.settings.quietHours,
+        dedupeWindowMs: this.settings.dedupeWindowMs,
+        osToast: this.settings.osToast,
+        sound: this.settings.sound,
+        toastDurationMs: this.settings.toastDurationMs,
+        historyLimit: this.settings.historyLimit,
+      },
+    })
+  }
+
+  async handlePresence(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'POST only' })
+      return
+    }
+    if (req.headers['x-dsh-feedback-hub'] !== '1') {
+      sendJson(res, 403, { ok: false, error: 'missing plugin header' })
+      return
+    }
+    const body = await readJsonBody(req)
+    if (body === undefined || typeof body !== 'object' || body === null) {
+      sendJson(res, 400, { ok: false, error: 'expected a JSON object' })
+      return
+    }
+    const id = typeof body.clientId === 'string' && body.clientId !== '' ? body.clientId.slice(0, 64) : 'unknown'
+    this.presence.set(id, {
+      at: Date.now(),
+      osNotify: ['granted', 'denied', 'default', 'unsupported'].includes(body.osNotify) ? body.osNotify : 'unknown',
+      locale: typeof body.locale === 'string' ? body.locale.slice(0, 32) : undefined,
+      hidden: body.hidden === true,
+    })
+    sendJson(res, 200, { ok: true })
+  }
+
+  async handleTest(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'POST only' })
+      return
+    }
+    if (req.headers['x-dsh-feedback-hub'] !== '1') {
+      sendJson(res, 403, { ok: false, error: 'missing plugin header' })
+      return
+    }
+    const body = (await readJsonBody(req)) ?? {}
+    const kind = typeof body.kind === 'string' ? body.kind : 'test'
+    const entry = this.push(testEvent(kind), { force: true })
+    sendJson(res, 200, { ok: true, entry })
+  }
+
+  async handleMute(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'POST only' })
+      return
+    }
+    if (req.headers['x-dsh-feedback-hub'] !== '1') {
+      sendJson(res, 403, { ok: false, error: 'missing plugin header' })
+      return
+    }
+    const body = (await readJsonBody(req)) ?? {}
+    const minutes = Number.isFinite(body.minutes) ? Math.min(24 * 60, Math.max(0, Math.round(body.minutes))) : 0
+    this.mutedUntil = minutes === 0 ? 0 : Date.now() + minutes * 60_000
+    sendJson(res, 200, { ok: true, mutedUntil: this.mutedUntil })
+  }
+}
+
+/** Synthetic shapes for the "send a test notification" buttons. */
+function testEvent(kind) {
+  const base = { kind, at: Date.now(), sessionTitle: 'dsh-feedback-hub' }
+  switch (kind) {
+    case 'approval':
+      return { ...base, toolName: 'bash', reason: 'test notification' }
+    case 'question':
+      return { ...base, question: 'This is a test question.', header: 'test' }
+    case 'turn-done':
+      return { ...base, durationMs: 125_000 }
+    case 'error':
+      return { ...base, errorMessage: 'This is a test error.' }
+    default:
+      return { ...base, kind: 'test' }
+  }
+}
+
+/** @param {any} agent */
+function sessionIdOf(agent) {
+  const id = agent?.id ?? agent?.session?.id
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
+/** Pick a readable string out of an `{ en, [locale] }` display record. */
+function localized(record) {
+  if (record === undefined || record === null) return undefined
+  if (typeof record === 'string') return record
+  for (const key of ['zh', 'zh-CN', 'zh-cn', 'en']) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim() !== '') return value
+  }
+  return undefined
+}
+
+/** @param {unknown} error */
+function messageOf(error) {
+  if (error === undefined || error === null) return undefined
+  if (typeof error === 'string') return truncate(error)
+  const message = error?.message ?? error?.reason ?? error?.code
+  return typeof message === 'string' ? truncate(message) : undefined
+}
+
+/**
+ * Plugin entry point. Every resource is registered on `ctx`, so disabling or
+ * removing the row leaves nothing behind.
+ * @param {any} ctx
+ * @param {unknown} config
+ */
+export function apply(ctx, config) {
+  const settings = resolveConfig(config)
+  const hub = new FeedbackHub(ctx, settings)
+  hub.start()
+  ctx.effect(() => () => hub.dispose(), 'dsh-feedback-hub: hub')
+  return () => hub.dispose()
+}
+
+export const name = 'dsh-feedback-hub'
+
+export { FeedbackHub }
