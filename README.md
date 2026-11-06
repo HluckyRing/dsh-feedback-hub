@@ -64,13 +64,7 @@ cd dsh-feedback-hub
 plugin_manager(action: "install_bundle", target: "D:\\path\\to\\dsh-feedback-hub")
 ```
 
-安装成功后，profile 的 `cordis.patch.yml` 里会多出：
-
-```yaml
-- id: dsh-feedback-hub
-  name: 'dsh-feedback-hub'
-  config: { ... }
-```
+安装实际做两件事：把本仓库以 `link:` 依赖写进 profile 的 `package.json`，并把 `dsh-feedback-hub` 加进 `dsh.profile.bundles`。**插件行与默认配置来自本仓库自带的 `cordis.patch.yml`**，不会被复制进 profile 的覆盖文件 —— 所以改默认值请按下面的「配置」一节做。
 
 ### 3. 验收
 
@@ -88,7 +82,20 @@ node .githooks/check-secrets.mjs   # 手动自查，退出码 0 才算干净
 
 ## 配置
 
-默认配置已写进 `cordis.patch.yml`。改完保存即可 —— 普通字段变更会重载插件。完整说明见 [docs/CONFIG.md](docs/CONFIG.md)。
+默认配置写在仓库自带的 `cordis.patch.yml` 里。**推荐改法**是在 profile 的 `cordis.patch.yml` 末尾追加一条同 `id` 的覆盖行（Loader 的匹配覆盖会替换整份 `config`，没写的字段仍由插件默认值兜底）：
+
+```yaml
+# ~/.dsh/profiles/<profile>/cordis.patch.yml 末尾
+- id: dsh-feedback-hub
+  config:
+    events:
+      turn-done: false
+    quietHours: '23:00-08:00'
+```
+
+完整字段见 [docs/CONFIG.md](docs/CONFIG.md)。直接改仓库里的 `cordis.patch.yml` 也能生效，但下次 `git pull` 容易冲突。
+
+默认值（仓库自带 patch，仅供对照）：
 
 ```yaml
 - id: dsh-feedback-hub

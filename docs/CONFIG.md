@@ -1,12 +1,20 @@
 # 配置参考
 
-所有配置都写在 profile 的 `cordis.patch.yml` 里（安装时由 `plugin_manager` 插入）。改完保存即生效；普通字段变更会重载插件，插件内存里的历史会清空。
+所有配置都放在 profile 的 `cordis.patch.yml` 里，以**同 id 覆盖行**的形式出现。
+
+安装（`install_bundle`）会把本仓库以 `link:` 依赖写进 profile 的 `package.json`，并把 `dsh-feedback-hub` 加进 `dsh.profile.bundles`；插件行与默认配置来自仓库自带的 `cordis.patch.yml`，**不会**被复制进 profile 的覆盖文件。所以：
+
+- **推荐**：在 profile 的 `cordis.patch.yml` 末尾追加下面这种覆盖行（Loader 的匹配覆盖会替换整份 `config`，没写的字段由插件默认值兜底）；
+- 也可以直接改仓库里的 `cordis.patch.yml`，但 `git pull` 时容易冲突。
+
+改完保存即生效；普通字段变更会重载插件，插件内存里的历史会清空。
 
 ## 完整示例
 
+把这段追加到 profile 的 `cordis.patch.yml` 末尾即可（覆盖行不需要重复 `name`）：
+
 ```yaml
 - id: dsh-feedback-hub
-  name: 'dsh-feedback-hub'
   config:
     events:
       approval: true
@@ -97,7 +105,8 @@ events:
 
 ## 与 `plugin_manager` 的关系
 
-- `install_bundle` 负责把包写进 profile 并插入这一行；
+- `install_bundle` 把本仓库以 `link:` 依赖写进 profile 的 `package.json`，并把 `dsh-feedback-hub` 加进 `dsh.profile.bundles`；插件行由**仓库自带的** `cordis.patch.yml` 提供；
+- profile 的 `cordis.patch.yml` 位于 bundle 层之后，所以在那里写同 id 覆盖行即可改配置；`cordis.patch.yml.bak-*` 是插件管理器留下的备份；
 - 卸载/禁用插件时，事件监听、HTTP 路由与定时器都会随插件一起销毁，不会残留；
 - 重装（升级已安装包）需要重启 DSH 才会加载新的 JS 模块 —— 目录链接方式下改代码也一样。
 
