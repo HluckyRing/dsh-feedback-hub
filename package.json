@@ -1,6 +1,6 @@
 {
   "name": "dsh-feedback-hub",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DeepSeek Harness notifications: desktop alerts, in-app toasts and an unread bell whenever the agent needs your authorization, asks a question, or finishes a task.",
   "type": "module",
   "license": "MIT",
