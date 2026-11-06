@@ -37,6 +37,7 @@ window.__ModuleLoader__.load({
         'kind.unknown': '通知',
         'settings.title': '通知中心',
         'settings.desc': '授权请求、代理提问和任务完成时给你反馈。窗口失焦或隐藏时会弹系统通知。',
+        'settings.hint.path': '也可以从「设置 → 通知中心」打开这一页',
         'settings.channel.title': '通道状态',
         'settings.channel.page': '页面连线',
         'settings.channel.permission': '桌面通知权限',
@@ -87,6 +88,7 @@ window.__ModuleLoader__.load({
         'settings.title': 'Notifications',
         'settings.desc':
           'Feedback when the agent needs your authorization, asks a question, or finishes a task. OS notifications appear while the window is unfocused or hidden.',
+        'settings.hint.path': 'Also available under Settings → Notifications',
         'settings.channel.title': 'Channels',
         'settings.channel.page': 'Page link',
         'settings.channel.permission': 'Desktop notifications',
@@ -592,6 +594,10 @@ window.__ModuleLoader__.load({
 .dfh-pop{position:fixed;z-index:70;width:320px;max-height:min(60vh,440px);display:flex;flex-direction:column;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,.22);overflow:hidden}
 .dfh-pop__head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12.5px;font-weight:600}
 .dfh-pop__list{overflow:auto;padding:6px}
+.dfh-pop--wide{width:360px}
+.dfh-pop__body{overflow:auto;padding:12px 14px}
+.dfh-pop__back{border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:14px;padding:2px 8px;border-radius:6px}
+.dfh-pop__back:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dfh-pop__empty{padding:18px 12px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12.5px}
 .dfh-row{display:flex;gap:9px;padding:8px;border-radius:8px;cursor:pointer}
 .dfh-row:hover{background:var(--dsw-alias-bg-layer-2)}
@@ -696,9 +702,10 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Bell({ store, text, link, notifier, openSettings, jump }) {
+    function Bell({ store, text, link, notifier, jump }) {
       const state = useStore(store)
       const [open, setOpen] = React.useState(false)
+      const [view, setView] = React.useState('list')
       const [rect, setRect] = React.useState(undefined)
       const buttonRef = React.useRef(null)
       const unread = state.history.length
@@ -710,6 +717,7 @@ window.__ModuleLoader__.load({
           const box = node.getBoundingClientRect()
           setRect({ left: Math.max(8, box.left - 4), bottom: Math.max(8, window.innerHeight - box.top + 8) })
         }
+        setView('list')
         setOpen(true)
         void notifier.requestPermission()
         void link.reportPresence()
@@ -756,15 +764,31 @@ window.__ModuleLoader__.load({
           ? h(
               'div',
               {
-                className: 'dfh-pop',
+                className: view === 'settings' ? 'dfh-pop dfh-pop--wide' : 'dfh-pop',
                 role: 'dialog',
-                'aria-label': text.t('bell.tooltip'),
+                'aria-label': view === 'settings' ? text.t('settings.title') : text.t('bell.tooltip'),
                 style: rect === undefined ? { right: 8, bottom: 56 } : { left: rect.left, bottom: rect.bottom },
               },
               h(
                 'div',
                 { className: 'dfh-pop__head' },
-                h('span', null, text.t('bell.tooltip')),
+                view === 'settings'
+                  ? h(
+                      React.Fragment,
+                      null,
+                      h(
+                        'button',
+                        {
+                          className: 'dfh-pop__back',
+                          type: 'button',
+                          'aria-label': 'back',
+                          onClick: () => setView('list'),
+                        },
+                        '←',
+                      ),
+                      h('span', { style: { flex: 1 } }, text.t('settings.title')),
+                    )
+                  : h('span', null, text.t('bell.tooltip')),
                 h(
                   'button',
                   {
@@ -776,7 +800,9 @@ window.__ModuleLoader__.load({
                   '✕',
                 ),
               ),
-              h(
+              view === 'settings'
+                ? h('div', { className: 'dfh-pop__body' }, h(Settings, { store, text, link, notifier, jump }))
+                : h(
                 'div',
                 { className: 'dfh-pop__list' },
                 state.history.length === 0
@@ -804,7 +830,9 @@ window.__ModuleLoader__.load({
                       ),
                     ),
               ),
-              h(
+              view === 'settings'
+                ? null
+                : h(
                 'div',
                 { className: 'dfh-pop__foot' },
                 store.muted()
@@ -816,10 +844,7 @@ window.__ModuleLoader__.load({
                   {
                     className: 'dfh-btn dfh-btn--primary',
                     type: 'button',
-                    onClick: () => {
-                      setOpen(false)
-                      openSettings()
-                    },
+                    onClick: () => setView('settings'),
                   },
                   text.t('bell.settings'),
                 ),
@@ -882,6 +907,7 @@ window.__ModuleLoader__.load({
           null,
           h('h3', null, text.t('settings.channel.title')),
           h('p', null, text.t('settings.desc')),
+          h('p', { style: { marginTop: 6, opacity: 0.75, fontSize: 11.5 } }, text.t('settings.hint.path')),
           h(
             'div',
             { className: 'dfh-grid' },
@@ -1018,14 +1044,6 @@ window.__ModuleLoader__.load({
           }
         }
 
-        const openSettings = () => {
-          try {
-            service(ctx, 'layout')?.selectPanel?.('settings')
-          } catch {
-            // The settings panel is shell-owned; nothing to do if it is absent.
-          }
-        }
-
         const notifier = createNotifier(store, text, jump)
         const link = createLink(store, chime, notifier)
 
@@ -1056,7 +1074,7 @@ window.__ModuleLoader__.load({
         disposable.push(register('shell.overlay', 'dsh-feedback-hub.toasts', 80, () => h(ToastStack, { store, text, jump })))
         disposable.push(
           register('sidebar.footer.action', 'dsh-feedback-hub.bell', 20, () =>
-            h(Bell, { store, text, link, notifier, openSettings, jump }),
+            h(Bell, { store, text, link, notifier, jump }),
           ),
         )
         disposable.push(
