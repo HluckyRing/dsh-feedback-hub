@@ -206,6 +206,29 @@ test('buildToastScript escapes single quotes in the app id', () => {
   assert.ok(script.includes("CreateToastNotifier('a''b')"))
 })
 
+test('buildToastXml honours scenario and duration', () => {
+  const important = buildToastXml({ title: 't', scenario: 'reminder', duration: 'long' })
+  assert.ok(important.includes('scenario="reminder"'))
+  assert.ok(important.includes('duration="long"'))
+})
+
+test('buildToastXml whitelists scenario and duration (no XML injection)', () => {
+  const hostile = buildToastXml({ title: 't', scenario: '"><script>', duration: 'forever' })
+  assert.ok(hostile.includes('scenario="default"'), 'unknown scenario must fall back to default')
+  assert.ok(hostile.includes('duration="short"'), 'unknown duration must fall back to short')
+  assert.ok(!hostile.includes('<script>'))
+})
+
+test('resolveConfig validates the chime volume', () => {
+  assert.equal(resolveConfig({}).volume, 0.6)
+  assert.equal(resolveConfig({ volume: 2 }).volume, 1)
+  assert.equal(resolveConfig({ volume: 0 }).volume, 0.05)
+  assert.equal(resolveConfig({ volume: 'loud' }).volume, 0.6)
+  assert.equal(resolveConfig({ volume: 0.35 }).volume, 0.35)
+  assert.equal(resolveConfig({}).chimeWithOsToast, false)
+  assert.equal(resolveConfig({ chimeWithOsToast: true }).chimeWithOsToast, true)
+})
+
 // -------------------------------------------------------------- ring buffer
 
 test('RingBuffer numbers entries and reports incremental reads', () => {

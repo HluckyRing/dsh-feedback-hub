@@ -42,6 +42,7 @@ window.__ModuleLoader__.load({
         'settings.channel.page': '页面连线',
         'settings.channel.permission': '桌面通知权限',
         'settings.channel.sound': '提示音',
+        'settings.channel.volume': '提示音音量',
         'settings.channel.fallback': '系统兜底',
         'settings.value.connected': '已连接',
         'settings.value.disconnected': '未连接',
@@ -59,6 +60,8 @@ window.__ModuleLoader__.load({
         'settings.test.title': '测试',
         'settings.test.hint': '点一下应当立刻看到浮窗和提示音；窗口失焦时会弹系统通知。',
         'settings.test.send': '测试',
+        'settings.test.preview': '试听提示音',
+        'settings.test.delayed': '5 秒后测试（先切走窗口）',
         'settings.grant': '允许桌面通知',
         'settings.granted': '桌面通知已开启',
         'settings.mute': '静音 1 小时',
@@ -93,6 +96,7 @@ window.__ModuleLoader__.load({
         'settings.channel.page': 'Page link',
         'settings.channel.permission': 'Desktop notifications',
         'settings.channel.sound': 'Chime',
+        'settings.channel.volume': 'Chime volume',
         'settings.channel.fallback': 'System fallback',
         'settings.value.connected': 'connected',
         'settings.value.disconnected': 'disconnected',
@@ -110,6 +114,8 @@ window.__ModuleLoader__.load({
         'settings.test.title': 'Test',
         'settings.test.hint': 'You should see a toast and hear a chime immediately; an OS notification appears while the window is unfocused.',
         'settings.test.send': 'Test',
+        'settings.test.preview': 'Play chime',
+        'settings.test.delayed': 'Test in 5s (switch away first)',
         'settings.grant': 'Enable desktop notifications',
         'settings.granted': 'Desktop notifications enabled',
         'settings.mute': 'Mute for 1 hour',
@@ -398,29 +404,54 @@ window.__ModuleLoader__.load({
             // Autoplay policy refused: stay silent rather than throwing.
           }
         },
-        play(kind) {
+        /**
+         * A short two-tone chime. Loud enough to be noticed across a room when
+         * `volume` is high, and harmonically rich so it cuts through music.
+         * @param {string} kind event kind, selects the interval
+         * @param {number} [volume] 0–1 peak gain
+         */
+        play(kind, volume = 0.6) {
           if (!unlocked) return
           const ctx = ensure()
           if (ctx === undefined) return
           try {
             if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+            const peak = Math.min(1, Math.max(0.05, Number.isFinite(volume) ? volume : 0.6))
             const notes =
-              kind === 'approval' ? [880, 1174.7] : kind === 'turn-done' ? [659.3, 880] : kind === 'error' ? [440, 329.6] : [783.99]
+              kind === 'approval' ? [880, 1174.7] : kind === 'turn-done' ? [659.3, 880] : kind === 'error' ? [440, 329.6] : [783.99, 1046.5]
+            const master = ctx.createGain()
+            master.gain.value = 1
+            master.connect(ctx.destination)
             const start = ctx.currentTime
             notes.forEach((frequency, index) => {
-              const at = start + index * 0.12
-              const oscillator = ctx.createOscillator()
-              const gain = ctx.createGain()
-              oscillator.type = 'sine'
-              oscillator.frequency.setValueAtTime(frequency, at)
-              gain.gain.setValueAtTime(0.0001, at)
-              gain.gain.exponentialRampToValueAtTime(0.16, at + 0.02)
-              gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.28)
-              oscillator.connect(gain)
-              gain.connect(ctx.destination)
-              oscillator.start(at)
-              oscillator.stop(at + 0.3)
+              const at = start + index * 0.16
+              // Fundamental plus a quiet octave: an additive bell rather than a beep.
+              for (const [partial, weight] of [
+                [1, 1],
+                [2, 0.35],
+                [3, 0.12],
+              ]) {
+                const oscillator = ctx.createOscillator()
+                const gain = ctx.createGain()
+                oscillator.type = partial === 1 ? 'sine' : 'triangle'
+                oscillator.frequency.setValueAtTime(frequency * partial, at)
+                gain.gain.setValueAtTime(0.0001, at)
+                gain.gain.exponentialRampToValueAtTime(peak * weight * 0.5, at + 0.015)
+                gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.45)
+                oscillator.connect(gain)
+                gain.connect(master)
+                oscillator.start(at)
+                oscillator.stop(at + 0.5)
+              }
             })
+            // Release the master so the graph can be collected.
+            setTimeout(() => {
+              try {
+                master.disconnect()
+              } catch {
+                // already gone
+              }
+            }, 1_500)
           } catch {
             // A failed chime is never worth surfacing.
           }
@@ -450,18 +481,29 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * Raise an OS notification when the page cannot be read right now.
+       * @returns true when a notification was actually created
+       */
       function notify(entry) {
-        if (permission() !== 'granted') return
+        if (permission() !== 'granted') return false
         // Only interrupt the desktop when the page cannot be read right now.
         const hidden = typeof document === 'undefined' || document.hidden || document.visibilityState === 'hidden'
         const focused = typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true
-        if (!hidden && focused) return
+        if (!hidden && focused) return false
+        const important = entry.kind === 'approval' || entry.kind === 'question'
+        const sound = store.state.config?.sound !== false
         try {
           const notification = new Notification(`${KIND_META[entry.kind]?.icon ?? '🔔'} ${kindLabel(text.t, entry.kind)}`, {
             body: describe(text.t, entry),
             tag: `dsh-feedback-hub-${entry.seq}`,
-            // The page owns the chime; the OS toast stays quiet to avoid a double sound.
-            silent: true,
+            // While the page is hidden this is the only reliably audible cue:
+            // let Windows play its own sound instead of our suspended WebAudio.
+            silent: !sound,
+            // Authorization and questions stay on screen until dismissed; the
+            // user may be in another application entirely.
+            timeoutType: important ? 'never' : 'default',
+            urgency: important ? 'critical' : 'normal',
           })
           notification.onclick = () => {
             try {
@@ -472,8 +514,10 @@ window.__ModuleLoader__.load({
             jump(entry)
             notification.close()
           }
+          return true
         } catch {
           // Some environments throw when constructing a notification.
+          return false
         }
       }
 
@@ -530,9 +574,15 @@ window.__ModuleLoader__.load({
       function handle(entry) {
         const isNews = store.add(entry) !== undefined
         if (!isNews) return
-        const muted = store.muted() || entry.silent === true
-        if (!muted && store.state.config?.sound !== false) chime.play(entry.kind)
-        if (!muted) notifier.notify(entry)
+        if (store.muted() || entry.silent === true) return
+        const config = store.state.config
+        const sound = config?.sound !== false
+        const shown = notifier.notify(entry)
+        // The system notification already rang; only add the chime when nothing
+        // else made a noise (or when the user explicitly asked for both).
+        if (sound && (shown === false || config?.chimeWithOsToast === true)) {
+          chime.play(entry.kind, config?.volume ?? 0.6)
+        }
       }
 
       async function start() {
@@ -702,7 +752,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Bell({ store, text, link, notifier, jump }) {
+    function Bell({ store, text, link, notifier, jump, chime }) {
       const state = useStore(store)
       const [open, setOpen] = React.useState(false)
       const [view, setView] = React.useState('list')
@@ -801,7 +851,7 @@ window.__ModuleLoader__.load({
                 ),
               ),
               view === 'settings'
-                ? h('div', { className: 'dfh-pop__body' }, h(Settings, { store, text, link, notifier, jump }))
+                ? h('div', { className: 'dfh-pop__body' }, h(Settings, { store, text, link, notifier, jump, chime }))
                 : h(
                 'div',
                 { className: 'dfh-pop__list' },
@@ -863,12 +913,20 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Settings({ store, text, link, notifier, jump }) {
+    function Settings({ store, text, link, notifier, jump, chime }) {
       const state = useStore(store)
       const [busy, setBusy] = React.useState(false)
       const config = state.config
 
-      const send = async (kind) => {
+      const send = async (kind, delayMs = 0) => {
+        if (delayMs > 0) {
+          // Gives the user time to switch to another application, so the
+          // notification is raised while the page is hidden — the real case.
+          setTimeout(() => {
+            void link.post('/dsh-feedback-hub/test', { kind }).catch(() => {})
+          }, delayMs)
+          return
+        }
         setBusy(true)
         try {
           await link.post('/dsh-feedback-hub/test', { kind })
@@ -919,6 +977,10 @@ window.__ModuleLoader__.load({
             h(Chip, {
               label: text.t('settings.channel.sound'),
               value: config?.sound === false ? text.t('settings.value.off') : text.t('settings.value.on'),
+            }),
+            h(Chip, {
+              label: text.t('settings.channel.volume'),
+              value: `${Math.round((typeof config?.volume === 'number' ? config.volume : 0.6) * 100)}%`,
             }),
             h(Chip, { label: text.t('settings.channel.fallback'), value: fallbackLabel }),
           ),
@@ -984,6 +1046,27 @@ window.__ModuleLoader__.load({
                 },
                 `${text.t('settings.test.send')} · ${kindLabel(text.t, kind)}`,
               ),
+            ),
+            h(
+              'button',
+              {
+                className: 'dfh-btn',
+                type: 'button',
+                onClick: () => {
+                  chime?.unlock?.()
+                  chime?.play?.('test', typeof config?.volume === 'number' ? config.volume : 0.6)
+                },
+              },
+              text.t('settings.test.preview'),
+            ),
+            h(
+              'button',
+              {
+                className: 'dfh-btn',
+                type: 'button',
+                onClick: () => void send('question', 5_000),
+              },
+              text.t('settings.test.delayed'),
             ),
           ),
         ),
@@ -1074,7 +1157,7 @@ window.__ModuleLoader__.load({
         disposable.push(register('shell.overlay', 'dsh-feedback-hub.toasts', 80, () => h(ToastStack, { store, text, jump })))
         disposable.push(
           register('sidebar.footer.action', 'dsh-feedback-hub.bell', 20, () =>
-            h(Bell, { store, text, link, notifier, jump }),
+            h(Bell, { store, text, link, notifier, jump, chime }),
           ),
         )
         disposable.push(
@@ -1082,7 +1165,7 @@ window.__ModuleLoader__.load({
             'settings.section',
             'dsh-feedback-hub',
             70,
-            () => h(Settings, { store, text, link, notifier, jump }),
+            () => h(Settings, { store, text, link, notifier, jump, chime }),
             () => text.t('settings.title'),
           ),
         )

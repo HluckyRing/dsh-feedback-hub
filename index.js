@@ -356,6 +356,24 @@ class FeedbackHub {
   }
 
   /**
+   * What the Host believes about the page, exposed in `/snapshot` so the
+   * settings page and a human debugging a missing notification can see it.
+   */
+  presenceSummary() {
+    let latest
+    for (const report of this.presence.values()) {
+      if (latest === undefined || report.at > latest.at) latest = report
+    }
+    return {
+      pages: this.presence.size,
+      osNotify: latest?.osNotify ?? 'unknown',
+      locale: latest?.locale ?? null,
+      hidden: latest?.hidden ?? null,
+      ageMs: latest === undefined ? null : Date.now() - latest.at,
+    }
+  }
+
+  /**
    * Windows toast fallback. Runs only when the page cannot raise one itself
    * (`osToast: host`), or when no page reports notification permission.
    * @param {any} entry
@@ -372,7 +390,17 @@ class FeedbackHub {
     if (PLATFORM !== 'win32') return
     if (this.activeToasts >= MAX_CONCURRENT_TOASTS) return
     const { title, body } = toastTextFor(entry, this.pageLocale())
-    const xml = buildToastXml({ title, body, silent: entry.silent === true })
+    const important = entry.kind === 'approval' || entry.kind === 'question'
+    const xml = buildToastXml({
+      title,
+      body,
+      // Quiet hours / mute / `sound: false` are the only reasons to stay quiet.
+      silent: entry.silent === true,
+      // Authorization and questions stay on screen until dismissed; finished
+      // work only needs a glance.
+      scenario: important ? 'reminder' : 'default',
+      duration: important ? 'long' : 'short',
+    })
     const script = buildToastScript({ xml, appId: this.settings.toastAppId })
     const file = path.join(os.tmpdir(), `dsh-feedback-hub-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`)
 
@@ -466,6 +494,7 @@ class FeedbackHub {
       cursor: this.buffer.nextSeq - 1,
       items: this.buffer.since(Number.isFinite(since) ? since : 0),
       mutedUntil: this.mutedUntil,
+      presence: this.presenceSummary(),
       config: {
         events: this.settings.events,
         turnDoneMinDurationMs: this.settings.turnDoneMinDurationMs,
@@ -473,6 +502,8 @@ class FeedbackHub {
         dedupeWindowMs: this.settings.dedupeWindowMs,
         osToast: this.settings.osToast,
         sound: this.settings.sound,
+        volume: this.settings.volume,
+        chimeWithOsToast: this.settings.chimeWithOsToast,
         toastDurationMs: this.settings.toastDurationMs,
         historyLimit: this.settings.historyLimit,
       },

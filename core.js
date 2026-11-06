@@ -43,6 +43,10 @@ export const DEFAULT_CONFIG = {
   osToast: 'auto',
   /** Play the in-app chime. */
   sound: true,
+  /** Chime loudness, 0–1. Only used when the OS toast is not the one making the sound. */
+  volume: 0.6,
+  /** Play the chime even when a system notification already rings. */
+  chimeWithOsToast: false,
   /** Android/Windows toast identity; the DSH desktop app's own AUMID by default. */
   toastAppId: 'com.deepseek.dsh',
   /** How long an in-app toast stays on screen. */
@@ -86,6 +90,8 @@ export function resolveConfig(raw) {
     typeof input.toastAppId === 'string' && input.toastAppId.trim() !== ''
       ? input.toastAppId.trim()
       : DEFAULT_CONFIG.toastAppId
+  const rawVolume = typeof input.volume === 'number' && Number.isFinite(input.volume) ? input.volume : DEFAULT_CONFIG.volume
+  const volume = Math.round(Math.min(1, Math.max(0.05, rawVolume)) * 100) / 100
 
   return {
     ...DEFAULT_CONFIG,
@@ -104,6 +110,8 @@ export function resolveConfig(raw) {
     quietHours,
     osToast: OS_TOAST_MODES.has(input.osToast) ? input.osToast : DEFAULT_CONFIG.osToast,
     sound: input.sound !== false,
+    volume,
+    chimeWithOsToast: input.chimeWithOsToast === true,
     toastAppId,
   }
 }
@@ -210,18 +218,25 @@ export function xmlEscape(value) {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
 }
 
+/** Windows toast scenarios we allow; anything else falls back to `default`. */
+const TOAST_SCENARIOS = new Set(['default', 'reminder', 'alarm', 'incomingCall'])
+/** Windows toast durations; `long` keeps the banner up ~25s instead of ~5s. */
+const TOAST_DURATIONS = new Set(['short', 'long'])
+
 /**
  * Build the ToastGeneric payload. Kept free of locale-specific markup so the
  * Host never needs to know the user's language.
- * @param {{ title: string, body?: string, silent?: boolean }} input
+ * @param {{ title: string, body?: string, silent?: boolean, scenario?: string, duration?: string }} input
  */
-export function buildToastXml({ title, body = '', silent = false }) {
+export function buildToastXml({ title, body = '', silent = false, scenario = 'default', duration = 'short' }) {
   const lines = [`<text>${xmlEscape(title)}</text>`]
   if (String(body).trim() !== '') lines.push(`<text>${xmlEscape(body)}</text>`)
   const audio = silent ? '<audio silent="true"/>' : ''
+  const safeScenario = TOAST_SCENARIOS.has(scenario) ? scenario : 'default'
+  const safeDuration = TOAST_DURATIONS.has(duration) ? duration : 'short'
   return [
     '<?xml version="1.0" encoding="utf-8"?>',
-    '<toast activationType="foreground" scenario="default" duration="short">',
+    `<toast activationType="foreground" scenario="${safeScenario}" duration="${safeDuration}">`,
     '<visual><binding template="ToastGeneric">',
     lines.join(''),
     '</binding></visual>',

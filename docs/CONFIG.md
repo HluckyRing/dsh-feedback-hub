@@ -28,6 +28,8 @@
     dedupeWindowMs: 5000
     osToast: auto
     sound: true
+    volume: 0.6
+    chimeWithOsToast: false
     toastAppId: com.deepseek.dsh
     toastDurationMs: 8000
     historyLimit: 100
@@ -48,7 +50,9 @@
 | `quietHours` | string | `''` | 静音时段，支持多段与跨午夜：`"23:00-08:00"`、`"12:00-13:30,18:00-19:00"`。空串 = 不启用。注意：静音时段内浮窗与历史**仍然记录**，只是不弹系统通知、不出声 |
 | `dedupeWindowMs` | number | `5000` | 同一事件在这个窗口内只提醒一次。判定键 = `类型 + 会话 + 工具名/问题摘要`。范围 0–600000 |
 | `osToast` | enum | `auto` | 系统通知由谁弹：`auto` / `client` / `host` / `off`，见下 |
-| `sound` | boolean | `true` | 应用内提示音（三类事件三种音） |
+| `sound` | boolean | `true` | 提示音。窗口失焦/隐藏时会由系统通知发声，窗口聚焦时用应用内合成音 |
+| `volume` | number | `0.6` | 应用内提示音音量（0.05–1）。窗口失焦时如果系统通知已发声，默认不再叠一次 |
+| `chimeWithOsToast` | boolean | `false` | 系统通知已经响过时，是否**再**播一次应用内提示音（默认不叠音，避免两种音效打架） |
 | `toastAppId` | string | `com.deepseek.dsh` | Windows Toast 的 AppUserModelID；默认即 DSH 桌面端身份，显示名会是 “DeepSeek Harness” |
 | `toastDurationMs` | number | `8000` | 应用内浮窗停留时长，范围 1500–60000 |
 | `historyLimit` | number | `100` | Host 内存环形缓冲长度，范围 10–500（不落盘） |
@@ -64,6 +68,11 @@
 | `client` | **只**由页面弹，Host 永不启动外部进程 | 不想让 DSH 调起 PowerShell |
 | `host` | **始终**由 Host 弹（页面只做浮窗） | 页面渲染进程被节流/冻结时更可靠；或页面通知权限被拒 |
 | `off` | 不弹系统通知，只有浮窗 + 提示音 | 只要能回到应用里看 |
+
+**重要事件会“赖着不走”**：授权请求和代理提问的系统通知使用 Windows 的
+`scenario="reminder"` + `duration="long"`（并且页面侧 `timeoutType: 'never'`），
+会一直停在屏幕右下角直到你关掉它 —— 你人在别的程序里也不会错过。
+「任务完成」则用默认的短通知。
 
 ## 常见用法
 
