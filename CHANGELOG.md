@@ -4,6 +4,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.0] - 2026-11-07
+
+### 新增
+- **点击系统通知 → 把 DSH 窗口从托盘/最小化拉回前台，并切到对应会话**。
+  Host 侧两条策略依次尝试：Electron 主进程 API（本插件的模块图里通常解析不到
+  `electron` 内置模块，已做实测确认）→ Win32 `EnumWindows` + `ShowWindow` +
+  `SetForegroundWindow` 兜底。实测：隐藏窗口后调用 `/reveal`，562ms 恢复可见。
+- 配置项 `revealOnClick`（默认开）与 `windowProcessName`（默认 `DeepSeek Harness`）。
+- `/snapshot` 的 presence 摘要与 `/reveal` 的失败诊断（`via`、`reason`、`diagnostics`）
+  便于排查“为什么没唤起”。
+- 设置页新增「测试唤起窗口」按钮；测试补到 29 项（含 reveal 脚本 ASCII/转义检查）。
+
 ## [0.1.2] - 2026-11-06
 
 ### 改进
@@ -32,6 +44,7 @@
 - 设置页「通知中心」：通道状态 + 发送测试通知
 - 静音时段、去重窗口、完成通知最短时长阈值
 
+[0.2.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.2.0
 [0.1.2]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.1.2
 [0.1.1]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.1.1
 [0.1.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.1.0
