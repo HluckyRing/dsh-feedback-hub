@@ -424,14 +424,19 @@ export function collectReadTargets(items, request) {
 /**
  * Bounded, monotonically numbered buffer. `seq` is the cursor the page sends
  * back when it reconnects, so a short disconnect loses nothing.
+ *
+ * `startSeq` should be seeded with `Date.now()` by the Host: a page keeps its
+ * cursor in memory, so a restart that reused small numbers would make every new
+ * entry look like a duplicate and silently drop it.
  * @template T
  */
 export class RingBuffer {
-  /** @param {number} limit */
-  constructor(limit = DEFAULT_CONFIG.historyLimit) {
+  /** @param {number} limit @param {number} [startSeq] */
+  constructor(limit = DEFAULT_CONFIG.historyLimit, startSeq = 1) {
     this.limit = Math.max(1, limit)
+    const seed = Number(startSeq)
+    this.nextSeq = Number.isFinite(seed) && seed > 0 ? Math.floor(seed) : 1
     this.items = []
-    this.nextSeq = 1
   }
 
   /** @param {Omit<T, 'seq'> & { seq?: number }} item */

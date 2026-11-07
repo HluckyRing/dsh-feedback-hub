@@ -424,6 +424,20 @@ window.__ModuleLoader__.load({
           state.history = []
           emit()
         },
+        /**
+         * Adopt a Host sequence that restarted behind our back (the Host seeds
+         * its cursor with the clock, but a downgrade or a fresh profile could
+         * still hand us a lower value; dropping our cursor is better than
+         * treating every new entry as a duplicate).
+         */
+        resetTo(cursor) {
+          for (const entry of active) clearTimer(entry)
+          timers.clear()
+          active.length = 0
+          state.history = []
+          state.cursor = typeof cursor === 'number' && Number.isFinite(cursor) && cursor > 0 ? cursor : 0
+          emit()
+        },
         /** Backlog from `/snapshot`: history only, never an interruption. */
         hydrate(items, cursor) {
           for (const item of Array.isArray(items) ? items : []) store.add(item, { backlog: true })
@@ -611,6 +625,8 @@ window.__ModuleLoader__.load({
     function createLink(store, chime, notifier, presenter) {
       let source
       let disposed = false
+      let reconnectTimer = 0
+      let attempt = 0
       const clientId = Math.random().toString(36).slice(2, 10)
 
       async function post(path, body) {
@@ -633,10 +649,10 @@ window.__ModuleLoader__.load({
             locale: typeof navigator !== 'undefined' && typeof navigator.language === 'string' ? navigator.language : 'en',
             hidden: typeof document !== 'undefined' ? document.hidden : false,
           })
-          store.setConnected(true)
           if (typeof result?.mutedUntil === 'number') store.setMutedUntil(result.mutedUntil)
         } catch {
-          store.setConnected(false)
+          // The busy flag is the SSE stream's job; a failed heartbeat just means
+          // the Host is restarting.
         }
       }
 
@@ -646,13 +662,15 @@ window.__ModuleLoader__.load({
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
           const snapshot = await response.json()
           if (disposed) return
-          store.setConnected(true)
           if (snapshot?.config !== undefined) store.setConfig(snapshot.config)
           if (typeof snapshot?.mutedUntil === 'number') store.setMutedUntil(snapshot.mutedUntil)
           store.setSightings(snapshot?.sightings)
+          if (typeof snapshot?.cursor === 'number' && snapshot.cursor < store.state.cursor) {
+            store.resetTo(snapshot.cursor)
+          }
           store.hydrate(snapshot?.items, snapshot?.cursor)
         } catch {
-          store.setConnected(false)
+          // Snapshot failures are retried by the next reconnect.
         }
       }
 
@@ -662,33 +680,72 @@ window.__ModuleLoader__.load({
         if (presenter !== undefined && typeof presenter.fn === 'function') presenter.fn(entry)
       }
 
+      /**
+       * Open (or reopen) the event stream. A browser closes an EventSource for
+       * good when the response is not 200 — which is exactly what happens while
+       * the plugin is being reloaded — so reopening is our job.
+       */
+      function openEvents() {
+        if (disposed || typeof EventSource === 'undefined') return
+        try {
+          source?.close()
+        } catch {
+          // already closed
+        }
+        try {
+          source = new EventSource(`/dsh-feedback-hub/events?since=${store.state.cursor}`)
+          source.addEventListener('open', () => {
+            attempt = 0
+            store.setConnected(true)
+          })
+          source.addEventListener('notification', (event) => {
+            try {
+              handle(JSON.parse(event.data))
+            } catch {
+              // Ignore malformed frames.
+            }
+          })
+          source.addEventListener('read', (event) => {
+            try {
+              store.applyRead(JSON.parse(event.data)?.seqs)
+            } catch {
+              // Ignore malformed frames.
+            }
+          })
+          source.addEventListener('clear', () => store.clearHistory())
+          source.addEventListener('error', () => {
+            store.setConnected(false)
+            if (source?.readyState === 2) scheduleReconnect()
+          })
+        } catch {
+          store.setConnected(false)
+          scheduleReconnect()
+        }
+      }
+
+      function scheduleReconnect() {
+        if (disposed || reconnectTimer !== 0) return
+        const delay = Math.min(30_000, 1_000 * 2 ** attempt)
+        attempt = Math.min(attempt + 1, 5)
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = 0
+          void start()
+        }, delay)
+      }
+
+      /** Watchdog entry: reopen a stream that ended or never opened. */
+      function ensureConnected() {
+        if (disposed || typeof EventSource === 'undefined') return
+        if (source === undefined || source.readyState === 2) {
+          attempt = 0
+          openEvents()
+        }
+      }
+
       async function start() {
         await loadSnapshot()
         if (disposed) return
-        if (typeof EventSource !== 'undefined') {
-          try {
-            source = new EventSource(`/dsh-feedback-hub/events?since=${store.state.cursor}`)
-            source.addEventListener('open', () => store.setConnected(true))
-            source.addEventListener('notification', (event) => {
-              try {
-                handle(JSON.parse(event.data))
-              } catch {
-                // Ignore malformed frames.
-              }
-            })
-            source.addEventListener('read', (event) => {
-              try {
-                store.applyRead(JSON.parse(event.data)?.seqs)
-              } catch {
-                // Ignore malformed frames.
-              }
-            })
-            source.addEventListener('clear', () => store.clearHistory())
-            source.addEventListener('error', () => store.setConnected(false))
-          } catch {
-            store.setConnected(false)
-          }
-        }
+        openEvents()
         await reportPresence()
       }
 
@@ -698,6 +755,7 @@ window.__ModuleLoader__.load({
         post,
         refresh: () => loadSnapshot(),
         reportPresence,
+        ensureConnected,
         dispose() {
           disposed = true
           try {
@@ -1384,7 +1442,11 @@ window.__ModuleLoader__.load({
           // Not a DOM environment.
         }
 
-        const onVisibility = () => void link.reportPresence()
+        const onVisibility = () => {
+          // Coming back to the tab is a good moment to repair a dead stream.
+          link.ensureConnected()
+          void link.reportPresence()
+        }
         try {
           document.addEventListener('visibilitychange', onVisibility)
         } catch {
@@ -1392,7 +1454,10 @@ window.__ModuleLoader__.load({
         }
 
         void link.start()
-        const heartbeat = setInterval(() => void link.reportPresence(), 25_000)
+        const heartbeat = setInterval(() => {
+          link.ensureConnected()
+          void link.reportPresence()
+        }, 10_000)
         if (typeof Notification === 'undefined') store.setOsPermission('unsupported')
 
         const register = (slot, id, order, Component, label) =>

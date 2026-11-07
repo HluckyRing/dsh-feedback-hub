@@ -279,6 +279,15 @@ test('resolveConfig normalizes notifyWhileViewing', () => {
   assert.equal(resolveConfig({ notifyWhileViewing: 'sometimes' }).notifyWhileViewing, 'important')
 })
 
+test('RingBuffer can be seeded with a clock value so restarts stay monotonic', () => {
+  const seeded = new RingBuffer(5, 1_700_000_000_000)
+  const entry = seeded.push({ kind: 'a' })
+  assert.equal(entry.seq, 1_700_000_000_000)
+  // A page that remembered a smaller cursor still sees the entry.
+  assert.deepEqual(seeded.since(10).map((item) => item.kind), ['a'])
+  assert.deepEqual(new RingBuffer(5, Number.NaN).push({ kind: 'b' }).seq, 1)
+})
+
 test('RingBuffer numbers entries and reports incremental reads', () => {
   const buffer = new RingBuffer(3)
   buffer.push({ kind: 'a' })

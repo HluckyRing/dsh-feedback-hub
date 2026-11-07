@@ -76,14 +76,33 @@
 
 页面的“在线”有 60s 有效期：`presence` 停止上报后自动失效，避免页面卡死时再也收不到通知。
 
-## 授权通知为什么用 `session/event` 而不是 `approval/request`
+## 序号为什么用时间戳播种
+
+页面把 `cursor`（最后处理的 `seq`）记在内存里，重连时带 `?since=cursor` 请求回放。
+如果 Host 每次重启都从 1 重新编号，页面就会认为所有新事件都“已经见过”并**静默丢弃**
+—— 实测症状：SSE 明明连着、`sseClients=1`，但页面一条都不处理。
+
+所以 `RingBuffer` 的起始序号由 `Date.now()` 播种（每次重启都严格大于上一次），
+客户端另有兜底：快照里的 `cursor` 比本地小时直接重置本地游标。
+
+## SSE 自愈与 Host 兜底
+
+- 浏览器在收到非 200 响应时会把 `EventSource` 关掉且不再自动重连，而插件重载期间
+  路由正好短暂消失。客户端因此加了看门狗：10s 心跳检查 `readyState === CLOSED` 就重开，
+  失败按 1s→30s 退避；`visibilitychange` 时也顺手修复。
+- Host 的“由页面弹系统通知”判定不再只看 presence：**必须同时有 SSE 订阅者**才把
+  通知交给页面。页面 SSE 死掉时 presence 仍在（那是另一个请求），只看 presence 会
+  导致通知两边都不弹。没有订阅者时 Host 直接弹自己的 Windows toast。
+
+
 
 `approval/request` 是 **waterfall**：某个监听器返回结果即“claim”这次请求，后面的监听器
 **根本不会被调用**。Web 设置/授权弹窗就是那个提前 claim 的 answerer —— 实测把
 `approval/request` 注册为普通监听器后，一次真实审批（20:31，ai_rag 会话）**完全没有进入
 插件**，而同一会话的 `turn-done` 正常到达，缓冲里找不到任何 approval 条目。
 
-所以授权改从**持久化会话事件**取：
+所以授权/提问的监听器都用 **`{ prepend: true }`** 注册到链首：先旁听、再 `next()`
+把决定权交回弹窗；同时授权另有一条持久化会话事件 `approval/asked` 兜底。
 
 - `approval/asked` 是审批开始时写进会话日志的提交事件（数据里带 `toolName` / `callId` /
   `reason`），属于 `session/event` 这条 **post-commit、fire-and-forget** 的 feed，

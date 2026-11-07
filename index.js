@@ -131,7 +131,9 @@ class FeedbackHub {
   constructor(ctx, settings) {
     this.ctx = ctx
     this.settings = settings
-    this.buffer = new RingBuffer(settings.historyLimit)
+    // Seed the sequence with the clock: a page keeps its cursor in memory, so a
+    // restart must never hand out numbers the page has already seen.
+    this.buffer = new RingBuffer(settings.historyLimit, Date.now())
     this.seen = new Map()
     this.subscribers = new Set()
     this.presence = new Map()
@@ -150,13 +152,15 @@ class FeedbackHub {
   // ---------------------------------------------------------------- lifecycle
 
   start() {
-    this.track(() => this.ctx.on('approval/request', (req, next) => this.onApproval(req, next)))
-    // Durable backstop: the `approval/request` waterfall can be claimed by an
-    // earlier answerer (the Web dialog does exactly that), which means a
-    // listener registered later is never invoked. The committed session event
-    // is appended regardless, and this feed cannot be claimed.
+    // `prepend` is essential: a waterfall stops at the first listener that
+    // claims the request, and the Web dialog claims it. Registered without
+    // prepend, these two listeners never run at all (verified against a real
+    // approval: the session log had `approval/asked`, the plugin saw nothing).
+    this.track(() => this.ctx.on('approval/request', (req, next) => this.onApproval(req, next), { prepend: true }))
+    this.track(() => this.ctx.on('user-questions/request', (request, next) => this.onQuestion(request, next), { prepend: true }))
+    // Durable backstop for authorizations: the committed `approval/asked` event
+    // arrives through the post-commit feed, which nothing can claim.
     this.track(() => this.ctx.on('session/event', (session, event) => this.onSessionEvent(session, event)))
-    this.track(() => this.ctx.on('user-questions/request', (request, next) => this.onQuestion(request, next)))
     this.track(() => this.ctx.on('agent/status', (payload) => this.onAgentStatus(payload)))
     this.track(() => this.ctx.on('agent/error', (payload) => this.onAgentError(payload)))
     this.track(() => this.ctx.on('subagent/end', (info) => this.onSubagentEnd(info)))
@@ -452,13 +456,16 @@ class FeedbackHub {
 
   /**
    * Windows toast fallback. Runs only when the page cannot raise one itself
-   * (`osToast: host`), or when no page reports notification permission.
+   * (`osToast: host`), or when no page is able to receive the notification.
    * @param {any} entry
    */
   maybeToast(entry) {
     const mode = this.settings.osToast
     if (mode === 'off' || mode === 'client') return
-    if (mode === 'auto' && this.livePage() !== undefined) return
+    // `auto`: only skip when a page is both connected to the stream and allowed
+    // to raise notifications. A page can keep posting presence while its
+    // EventSource is dead, and trusting presence alone loses notifications.
+    if (mode === 'auto' && this.subscribers.size > 0 && this.livePage() !== undefined) return
     this.showWindowsToast(entry)
   }
 
@@ -728,6 +735,7 @@ class FeedbackHub {
       presence: this.presenceSummary(),
       sightings: this.sightings.slice(-15),
       sessionEvents: Object.fromEntries(this.sessionEvents),
+      sseClients: this.subscribers.size,
       config: {
         events: this.settings.events,
         turnDoneMinDurationMs: this.settings.turnDoneMinDurationMs,
