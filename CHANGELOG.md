@@ -4,6 +4,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-11-07
+
+### 新增
+- **已读 / 未读**：铃铛角标只数未读；点浮窗、点系统通知、点列表条目都会标记已读；
+  面板里未读高亮 + 圆点、已读变暗，并新增「只看未读」筛选。
+- **「全部已读」与「清空历史」分离**：前者只改状态，后者才从 Host 内存删除。
+- **正在看的会话自动已读**：在会话级槽位 `conversation.composer.dock` 注册渲染为
+  null 的观察组件拿到 `sessionId`；通知到达时若用户正停留该会话（页面可见且聚焦），
+  直接标记已读且不弹浮窗、不出声、不发系统通知。
+- 切换会话时，该会话的历史通知自动全部已读。
+
+### 变更
+- 已读状态由 **Host 持有**（缓冲条目带 `read` / `readAt`），通过 SSE `read` / `clear`
+  帧广播；刷新页面、多标签页状态一致。
+- 新增 `POST /read`（`{ seqs }` / `{ sessionId }` / `{ all: true }`）与 `POST /clear`。
+- `collectReadTargets` 纯函数解析已读目标，测试补到 30 项。
+
 ## [0.2.0] - 2026-11-07
 
 ### 新增
@@ -44,6 +61,7 @@
 - 设置页「通知中心」：通道状态 + 发送测试通知
 - 静音时段、去重窗口、完成通知最短时长阈值
 
+[0.3.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.0
 [0.2.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.2.0
 [0.1.2]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.1.2
 [0.1.1]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.1.1
