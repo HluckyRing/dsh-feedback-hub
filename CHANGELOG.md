@@ -4,6 +4,25 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-11-07
+
+### 修复
+- **提问（`ask_user_question`）同样收不到通知**：和授权一样，`user-questions/request`
+  是 waterfall，被 Web 弹窗提前 claim。两个 waterfall 监听器改为 `{ prepend: true }`
+  注册到链首，先旁听再 `next()`，弹窗行为不变。
+- **Host 重启后所有通知被客户端静默丢弃**：序号从 1 重新编号，而页面记着旧游标，
+  新事件全被判成“已见过”。`RingBuffer` 改为用 `Date.now()` 播种序号，客户端在
+  快照游标回退时也会重置本地游标。
+- **SSE 断开后不恢复**：浏览器遇到非 200 会永久关闭 `EventSource`（插件重载期间正好
+  命中）。客户端加看门狗：10s 检查 `readyState === CLOSED` 就重开，失败按 1s→30s
+  退避，窗口重新可见时也会修复。
+- **页面 SSE 死掉时 Host 仍以为它会弹**：`osToast: auto` 的判定改为“有 SSE 订阅者
+  且页面已授权”才交给页面，否则 Host 直接弹兜底 toast。
+
+### 新增
+- `/snapshot` 增加 `sseClients`，设置页「诊断」能直接看到页面是否真的连着事件流。
+- 测试补到 33 项（含序号播种）。
+
 ## [0.3.1] - 2026-11-07
 
 ### 修复
@@ -78,6 +97,7 @@
 - 设置页「通知中心」：通道状态 + 发送测试通知
 - 静音时段、去重窗口、完成通知最短时长阈值
 
+[0.3.2]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.2
 [0.3.1]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.1
 [0.3.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.0
 [0.2.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.2.0
