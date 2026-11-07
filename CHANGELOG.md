@@ -4,6 +4,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.3] - 2026-11-07
+
+### 变更
+- **`turnDoneMinDurationMs` 默认值从 `60000` 改为 `0`**：默认每轮任务完成都提醒。
+  原来的 60s 门限会把短任务静默掉（实测 21:27 与 21:37 两次真实完成事件
+  都是 `reason='too-short'` 被过滤）。想只被长任务打扰，把它设成 `300000` 之类即可。
+- 文档同步：README / CONFIG 的门限说明与示例。
+- 测试补到 34 项（零门限放行短回合、显式门限仍然过滤）。
+
 ## [0.3.2] - 2026-11-07
 
 ### 修复
@@ -97,6 +106,7 @@
 - 设置页「通知中心」：通道状态 + 发送测试通知
 - 静音时段、去重窗口、完成通知最短时长阈值
 
+[0.3.3]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.3
 [0.3.2]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.2
 [0.3.1]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.1
 [0.3.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.0
