@@ -4,6 +4,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.1] - 2026-11-07
+
+### 修复
+- **等待审批时没有任何提示**。根因：`approval/request` 是 waterfall，Web 授权弹窗作为
+  answerer 会提前 claim，注册在它之后的监听器根本不会被调用（已用会话日志与插件缓冲区
+  对照确认：同一会话的 turn-done 收到、approval 完全没有）。改为监听持久化会话事件
+  `approval/asked`，它走 post-commit 的 `session/event` feed，不存在被 claim 的问题；
+  原 waterfall 监听保留作补充，重复事件由去重窗口吸收。
+- 你正看着某个会话时，**授权/提问仍然弹浮窗提醒**（新配置 `notifyWhileViewing`，
+  默认 `important`；设为 `never` 恢复“一律只标已读”的旧行为）。
+
+### 新增
+- 诊断能力：`/snapshot` 增加 `sightings`（最近 15 个候选事件及其 `delivered`/`reason`）
+  与 `sessionEvents`（看到的各类会话事件计数）；设置页新增「诊断」卡片 + 刷新按钮，
+  能区分“没收到事件”和“收到但被过滤”。
+- 测试补到 32 项。
+
 ## [0.3.0] - 2026-11-07
 
 ### 新增
@@ -61,6 +78,7 @@
 - 设置页「通知中心」：通道状态 + 发送测试通知
 - 静音时段、去重窗口、完成通知最短时长阈值
 
+[0.3.1]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.1
 [0.3.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.0
 [0.2.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.2.0
 [0.1.2]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.1.2
