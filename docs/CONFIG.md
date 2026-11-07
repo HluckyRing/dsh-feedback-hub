@@ -31,6 +31,7 @@
     volume: 0.6
     chimeWithOsToast: false
     revealOnClick: true
+    notifyWhileViewing: important
     windowProcessName: 'DeepSeek Harness'
     toastAppId: com.deepseek.dsh
     toastDurationMs: 8000
@@ -56,6 +57,7 @@
 | `volume` | number | `0.6` | 应用内提示音音量（0.05–1）。窗口失焦时如果系统通知已发声，默认不再叠一次 |
 | `chimeWithOsToast` | boolean | `false` | 系统通知已经响过时，是否**再**播一次应用内提示音（默认不叠音，避免两种音效打架） |
 | `revealOnClick` | boolean | `true` | 点击系统通知时把 DSH 窗口从托盘/最小化拉回来并聚焦。关掉则点击只跳转、不唤窗 |
+| `notifyWhileViewing` | enum | `important` | 你正看着某个会话时：`important` = 授权/提问仍然弹浮窗提醒；`never` = 一律只标已读不打扰 |
 | `windowProcessName` | string | `DeepSeek Harness` | Win32 兜底查找窗口用的进程名。只有改了应用名/使用定制分支时才需要动 |
 | `toastAppId` | string | `com.deepseek.dsh` | Windows Toast 的 AppUserModelID；默认即 DSH 桌面端身份，显示名会是 “DeepSeek Harness” |
 | `toastDurationMs` | number | `8000` | 应用内浮窗停留时长，范围 1500–60000 |

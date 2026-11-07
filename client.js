@@ -73,6 +73,12 @@ window.__ModuleLoader__.load({
         'settings.clear': '清空历史',
         'settings.empty': '暂无历史通知',
         'settings.time.justNow': '刚刚',
+        'settings.diag.title': '诊断',
+        'settings.diag.hint': '插件最近看到的事件。某次通知没出现时，这里能看出它是否被收到、是否被过滤。',
+        'settings.diag.refresh': '刷新',
+        'settings.diag.empty': '暂无记录',
+        'settings.diag.delivered': '已发送',
+        'settings.diag.dropped': '被过滤',
         'settings.time.minutes': '{n} 分钟前',
         'settings.time.hours': '{n} 小时前',
       },
@@ -130,6 +136,12 @@ window.__ModuleLoader__.load({
         'settings.clear': 'Clear history',
         'settings.empty': 'No history yet',
         'settings.time.justNow': 'just now',
+        'settings.diag.title': 'Diagnostics',
+        'settings.diag.hint': 'Events the plugin recently saw. When a notification is missing, this shows whether it arrived and whether it was filtered.',
+        'settings.diag.refresh': 'Refresh',
+        'settings.diag.empty': 'Nothing recorded',
+        'settings.diag.delivered': 'delivered',
+        'settings.diag.dropped': 'filtered',
         'settings.time.minutes': '{n} min ago',
         'settings.time.hours': '{n} h ago',
       },
@@ -283,6 +295,8 @@ window.__ModuleLoader__.load({
         mutedUntil: 0,
         /** Session currently open in the Conversation, reported by `SessionObserver`. */
         activeSessionId: undefined,
+        /** Recent raw events the Host saw, for the settings page diagnosis list. */
+        sightings: [],
         osPermission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
       }
 
@@ -330,6 +344,10 @@ window.__ModuleLoader__.load({
         },
         setConfig(config) {
           state.config = config
+          emit()
+        },
+        setSightings(sightings) {
+          state.sightings = Array.isArray(sightings) ? sightings : []
           emit()
         },
         setMutedUntil(value) {
@@ -631,6 +649,7 @@ window.__ModuleLoader__.load({
           store.setConnected(true)
           if (snapshot?.config !== undefined) store.setConfig(snapshot.config)
           if (typeof snapshot?.mutedUntil === 'number') store.setMutedUntil(snapshot.mutedUntil)
+          store.setSightings(snapshot?.sightings)
           store.hydrate(snapshot?.items, snapshot?.cursor)
         } catch {
           store.setConnected(false)
@@ -677,6 +696,7 @@ window.__ModuleLoader__.load({
         clientId,
         start,
         post,
+        refresh: () => loadSnapshot(),
         reportPresence,
         dispose() {
           disposed = true
@@ -1186,6 +1206,46 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dfh-card' },
+          h('h3', null, text.t('settings.diag.title')),
+          h('p', null, text.t('settings.diag.hint')),
+          state.sightings.length === 0
+            ? h('p', { style: { marginTop: 8 } }, text.t('settings.diag.empty'))
+            : h(
+                'div',
+                { className: 'dfh-history', style: { maxHeight: 180 } },
+                state.sightings
+                  .slice()
+                  .reverse()
+                  .map((item, index) =>
+                    h(
+                      'div',
+                      { key: `${item.at}-${index}`, className: 'dfh-row', style: { cursor: 'default' } },
+                      h(
+                        'div',
+                        { className: 'dfh-row__body' },
+                        h(
+                          'div',
+                          { className: 'dfh-row__title' },
+                          `${kindLabel(text.t, item.kind)} · ${item.delivered ? text.t('settings.diag.delivered') : text.t('settings.diag.dropped')}${item.reason ? ` (${item.reason})` : ''}`,
+                        ),
+                        h(
+                          'div',
+                          { className: 'dfh-row__time' },
+                          `${new Date(item.at).toLocaleTimeString()}${item.toolName ? ` · ${item.toolName}` : ''}`,
+                        ),
+                      ),
+                    ),
+                  ),
+              ),
+          h(
+            'div',
+            { className: 'dfh-actions' },
+            h('button', { className: 'dfh-btn', type: 'button', onClick: () => void link.refresh() }, text.t('settings.diag.refresh')),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'dfh-card' },
           h('h3', null, text.t('settings.title')),
           state.history.length === 0
             ? h('p', null, text.t('settings.empty'))
@@ -1294,13 +1354,19 @@ window.__ModuleLoader__.load({
         }
 
         presenter.fn = (entry) => {
-          // Already looking at that session: no toast, no sound — just read.
+          const config = store.state.config
           if (store.isViewing(entry.sessionId)) {
-            markRead([entry.seq])
+            // Authorization and questions still deserve a visible nudge — the
+            // user asked for "waiting for approval" to never pass silently.
+            const critical = entry.kind === 'approval' || entry.kind === 'question'
+            if (!(critical && config?.notifyWhileViewing !== 'never')) {
+              markRead([entry.seq])
+              return
+            }
+            if (config?.sound !== false) chime.play(entry.kind, config?.volume ?? 0.6)
             return
           }
           if (store.muted() || entry.silent === true) return
-          const config = store.state.config
           const sound = config?.sound !== false
           const shown = notifier.notify(entry)
           // The system notification already rang; only add the chime when nothing

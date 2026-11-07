@@ -24,6 +24,7 @@ import {
   dedupeKey,
   formatDuration,
   inQuietHours,
+  isCriticalKind,
   normalizeQuietHours,
   parseQuietHours,
   resolveConfig,
@@ -262,6 +263,20 @@ test('collectReadTargets resolves seqs, session and all', () => {
   assert.deepEqual(collectReadTargets(items, { seqs: [3] }), [], 'already read entries are never returned')
   assert.deepEqual(collectReadTargets(undefined, { all: true }), [])
   assert.deepEqual(collectReadTargets(items, { seqs: ['x', 1] }), [1])
+})
+
+test('isCriticalKind marks the blocking kinds', () => {
+  assert.equal(isCriticalKind('approval'), true)
+  assert.equal(isCriticalKind('question'), true)
+  assert.equal(isCriticalKind('turn-done'), false)
+  assert.equal(isCriticalKind('error'), false)
+  assert.equal(isCriticalKind(undefined), false)
+})
+
+test('resolveConfig normalizes notifyWhileViewing', () => {
+  assert.equal(resolveConfig({}).notifyWhileViewing, 'important')
+  assert.equal(resolveConfig({ notifyWhileViewing: 'never' }).notifyWhileViewing, 'never')
+  assert.equal(resolveConfig({ notifyWhileViewing: 'sometimes' }).notifyWhileViewing, 'important')
 })
 
 test('RingBuffer numbers entries and reports incremental reads', () => {

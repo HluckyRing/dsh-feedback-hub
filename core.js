@@ -17,6 +17,14 @@ export const EVENT_KINDS = [
   'test',
 ]
 
+/** Kinds the user has to act on; they keep their notification even while focused. */
+export const CRITICAL_KINDS = new Set(['approval', 'question'])
+
+/** True for the kinds that block the agent until the user acts. */
+export function isCriticalKind(kind) {
+  return CRITICAL_KINDS.has(kind)
+}
+
 /** How each kind behaves by default. */
 export const DEFAULT_CONFIG = {
   events: {
@@ -47,6 +55,12 @@ export const DEFAULT_CONFIG = {
   volume: 0.6,
   /** Play the chime even when a system notification already rings. */
   chimeWithOsToast: false,
+  /**
+   * What happens when a notification arrives for the session on screen.
+   * - `important` (default) authorization and questions still pop a toast
+   * - `never`     everything is just marked read
+   */
+  notifyWhileViewing: 'important',
   /** Clicking a notification brings the DSH window back (desktop only). */
   revealOnClick: true,
   /** Window-process name used by the Win32 reveal fallback (desktop app's exe name). */
@@ -116,6 +130,7 @@ export function resolveConfig(raw) {
     sound: input.sound !== false,
     volume,
     chimeWithOsToast: input.chimeWithOsToast === true,
+    notifyWhileViewing: input.notifyWhileViewing === 'never' ? 'never' : 'important',
     revealOnClick: input.revealOnClick !== false,
     windowProcessName:
       typeof input.windowProcessName === 'string' && input.windowProcessName.trim() !== ''

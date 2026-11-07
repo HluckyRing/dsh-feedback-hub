@@ -136,6 +136,10 @@ class FeedbackHub {
     this.subscribers = new Set()
     this.presence = new Map()
     this.turnStarts = new Map()
+    /** Recent candidates this plugin saw, for diagnosing "why no notification". */
+    this.sightings = []
+    /** Count of every session event type seen after commit (diagnonstic). */
+    this.sessionEvents = new Map()
     this.mutedUntil = 0
     this.activeToasts = 0
     this.disposers = []
@@ -147,6 +151,11 @@ class FeedbackHub {
 
   start() {
     this.track(() => this.ctx.on('approval/request', (req, next) => this.onApproval(req, next)))
+    // Durable backstop: the `approval/request` waterfall can be claimed by an
+    // earlier answerer (the Web dialog does exactly that), which means a
+    // listener registered later is never invoked. The committed session event
+    // is appended regardless, and this feed cannot be claimed.
+    this.track(() => this.ctx.on('session/event', (session, event) => this.onSessionEvent(session, event)))
     this.track(() => this.ctx.on('user-questions/request', (request, next) => this.onQuestion(request, next)))
     this.track(() => this.ctx.on('agent/status', (payload) => this.onAgentStatus(payload)))
     this.track(() => this.ctx.on('agent/error', (payload) => this.onAgentError(payload)))
@@ -218,9 +227,38 @@ class FeedbackHub {
     return next()
   }
 
-  /** @param {any} request @param {() => Promise<any>} next */
-  onQuestion(request, next) {
+  /**
+   * Observe the durable session log. Only `approval/asked` matters here: the
+   * `approval/request` waterfall is claimed by the Web dialog before later
+   * listeners run, so this committed event is the reliable signal.
+   * @param {any} session @param {any} event
+   */
+  onSessionEvent(session, event) {
+    const type = event?.type
+    if (typeof type === 'string') {
+      this.sessionEvents.set(type, (this.sessionEvents.get(type) ?? 0) + 1)
+      if (this.sessionEvents.size > 60) {
+        // Keep the diagnostic map bounded; the feed is high frequency.
+        const keep = [...this.sessionEvents].slice(-60)
+        this.sessionEvents = new Map(keep)
+      }
+    }
+    if (type !== 'approval/asked') return
     try {
+      this.push({
+        kind: 'approval',
+        sessionId: session?.id,
+        sessionTitle: this.titleOfSession(session),
+        toolName: event.data?.toolName,
+        reason: truncate(event.data?.reason ?? ''),
+      })
+    } catch {
+      // Observing must never disturb the session.
+    }
+  }
+
+  /** @param {any} request @param {() => Promise<any>} next */
+  onQuestion(request, next) {    try {
       const first = request?.questions?.[0]
       const intent = first?.intent
       const isApproval = intent?.kind === 'approval' || intent?.kind === 'plan-review'
@@ -301,6 +339,9 @@ class FeedbackHub {
     const verdict = options.force
       ? { deliver: true, quiet: false }
       : shouldDeliver({ config: this.settings, event, seen: this.seen, now })
+    // Record before filtering, so "the plugin never saw it" and "the plugin
+    // deliberately dropped it" are distinguishable afterwards.
+    this.recordSighting(event, verdict, options.force === true)
     if (!verdict.deliver) return undefined
 
     const muted = this.mutedUntil > now
@@ -421,6 +462,20 @@ class FeedbackHub {
     this.showWindowsToast(entry)
   }
 
+  /** Remember what this plugin saw, for the settings page's diagnosis list. */
+  recordSighting(event, verdict, forced) {
+    this.sightings.push({
+      at: event.at,
+      kind: event.kind,
+      sessionId: event.sessionId ?? null,
+      toolName: event.toolName ?? null,
+      delivered: verdict.deliver === true,
+      reason: forced === true ? 'forced' : (verdict.reason ?? null),
+      quiet: verdict.quiet === true,
+    })
+    if (this.sightings.length > 30) this.sightings.splice(0, this.sightings.length - 30)
+  }
+
   /** @param {any} entry */
   async showWindowsToast(entry) {
     if (PLATFORM !== 'win32') return
@@ -464,9 +519,8 @@ class FeedbackHub {
   // ------------------------------------------------------------- inspection
 
   /** Best-effort session title; absent when the title service is not composed. */
-  titleOf(agent) {
-    const session = agent?.session
-    if (session === undefined) return undefined
+  titleOfSession(session) {
+    if (session === undefined || session === null) return undefined
     try {
       const snapshot = this.ctx.get('sessionTitle')?.get?.(session)
       const title = snapshot?.title
@@ -474,6 +528,11 @@ class FeedbackHub {
     } catch {
       return undefined
     }
+  }
+
+  /** @param {any} agent */
+  titleOf(agent) {
+    return this.titleOfSession(agent?.session)
   }
 
   /**
@@ -667,6 +726,8 @@ class FeedbackHub {
       items: this.buffer.since(Number.isFinite(since) ? since : 0),
       mutedUntil: this.mutedUntil,
       presence: this.presenceSummary(),
+      sightings: this.sightings.slice(-15),
+      sessionEvents: Object.fromEntries(this.sessionEvents),
       config: {
         events: this.settings.events,
         turnDoneMinDurationMs: this.settings.turnDoneMinDurationMs,
@@ -676,6 +737,7 @@ class FeedbackHub {
         sound: this.settings.sound,
         volume: this.settings.volume,
         chimeWithOsToast: this.settings.chimeWithOsToast,
+        notifyWhileViewing: this.settings.notifyWhileViewing,
         revealOnClick: this.settings.revealOnClick,
         toastDurationMs: this.settings.toastDurationMs,
         historyLimit: this.settings.historyLimit,

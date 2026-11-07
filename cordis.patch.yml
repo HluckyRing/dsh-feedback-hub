@@ -34,6 +34,8 @@
         chimeWithOsToast: false
         # 点击系统通知时把窗口从托盘/最小化拉回前台并跳到对应会话。
         revealOnClick: true
+        # 你正看着某个会话时：important = 授权/提问仍然弹浮窗；never = 一律只标已读。
+        notifyWhileViewing: important
         # Win32 兜底找窗口用的进程名（改了应用名/定制分支才需要动）。
         windowProcessName: 'DeepSeek Harness'
         # Windows 通知的 AppUserModelID；默认就是 DSH 桌面端的身份。

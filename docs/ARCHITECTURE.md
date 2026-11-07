@@ -76,6 +76,31 @@
 
 页面的“在线”有 60s 有效期：`presence` 停止上报后自动失效，避免页面卡死时再也收不到通知。
 
+## 授权通知为什么用 `session/event` 而不是 `approval/request`
+
+`approval/request` 是 **waterfall**：某个监听器返回结果即“claim”这次请求，后面的监听器
+**根本不会被调用**。Web 设置/授权弹窗就是那个提前 claim 的 answerer —— 实测把
+`approval/request` 注册为普通监听器后，一次真实审批（20:31，ai_rag 会话）**完全没有进入
+插件**，而同一会话的 `turn-done` 正常到达，缓冲里找不到任何 approval 条目。
+
+所以授权改从**持久化会话事件**取：
+
+- `approval/asked` 是审批开始时写进会话日志的提交事件（数据里带 `toolName` / `callId` /
+  `reason`），属于 `session/event` 这条 **post-commit、fire-and-forget** 的 feed，
+  没有“被谁 claim”的问题；
+- 监听器只做一次类型判断，其余事件立即返回，开销可忽略；
+- `approval/request` 的监听器保留作补充（其他组合下可能先于弹窗注册），重复事件由
+  5s 去重窗口吸收。
+
+诊断字段（`/snapshot`）：
+
+| 字段 | 含义 |
+|---|---|
+| `sessionEvents` | 插件看到的各类会话事件计数 —— 用它能判断 feed 是否还活着 |
+| `sightings` | 最近 15 个通知候选：`kind`、`delivered`、`reason`（`disabled` / `too-short` / `duplicate` / `forced`），用它能区分“没收到”和“收到但被过滤” |
+
+设置页的「诊断」卡片就是这两组数据的展示 + 刷新按钮。
+
 ## 已读状态归谁管
 
 **Host 是唯一真源**：环形缓冲里的每条通知带 `read` / `readAt`，页面只是镜像。
