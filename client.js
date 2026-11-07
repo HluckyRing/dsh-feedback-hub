@@ -23,6 +23,8 @@ window.__ModuleLoader__.load({
       zh: {
         'bell.tooltip': '通知中心',
         'bell.empty': '还没有通知',
+        'bell.noUnread': '没有未读通知',
+        'bell.onlyUnread': '只看未读',
         'bell.markAll': '全部已读',
         'bell.mute': '静音 1 小时',
         'bell.unmute': '取消静音',
@@ -77,6 +79,8 @@ window.__ModuleLoader__.load({
       en: {
         'bell.tooltip': 'Notifications',
         'bell.empty': 'Nothing yet',
+        'bell.noUnread': 'No unread notifications',
+        'bell.onlyUnread': 'Unread only',
         'bell.markAll': 'Mark all read',
         'bell.mute': 'Mute for 1 hour',
         'bell.unmute': 'Unmute',
@@ -277,6 +281,8 @@ window.__ModuleLoader__.load({
         connected: false,
         config: undefined,
         mutedUntil: 0,
+        /** Session currently open in the Conversation, reported by `SessionObserver`. */
+        activeSessionId: undefined,
         osPermission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
       }
 
@@ -332,6 +338,66 @@ window.__ModuleLoader__.load({
         },
         muted() {
           return state.mutedUntil > Date.now()
+        },
+        /** Unread entries currently held (the bell badge). */
+        unread() {
+          let count = 0
+          for (const entry of state.history) if (entry.read !== true) count += 1
+          return count
+        },
+        /** Apply a read mark that already happened on the Host. */
+        applyRead(seqs) {
+          if (!Array.isArray(seqs) || seqs.length === 0) return 0
+          const wanted = new Set(seqs)
+          let changed = 0
+          for (const entry of state.history) {
+            if (entry.read === true || !wanted.has(entry.seq)) continue
+            entry.read = true
+            changed += 1
+          }
+          if (changed > 0) emit()
+          return changed
+        },
+        applyReadForSession(sessionId) {
+          if (typeof sessionId !== 'string' || sessionId === '') return 0
+          let changed = 0
+          for (const entry of state.history) {
+            if (entry.read === true || entry.sessionId !== sessionId) continue
+            entry.read = true
+            changed += 1
+          }
+          if (changed > 0) emit()
+          return changed
+        },
+        applyReadAll() {
+          let changed = 0
+          for (const entry of state.history) {
+            if (entry.read === true) continue
+            entry.read = true
+            changed += 1
+          }
+          if (changed > 0) emit()
+          return changed
+        },
+        /** The Conversation moved to another session (or none). */
+        setActiveSession(sessionId) {
+          if (state.activeSessionId === sessionId) return false
+          state.activeSessionId = sessionId
+          emit()
+          return true
+        },
+        /**
+         * True when the user is looking at that session right now: same session,
+         * page visible and focused. Used to mark arriving notifications read
+         * instead of interrupting.
+         */
+        isViewing(sessionId) {
+          if (typeof sessionId !== 'string' || sessionId === '') return false
+          if (state.activeSessionId !== sessionId) return false
+          if (typeof document === 'undefined') return false
+          if (document.hidden === true || document.visibilityState === 'hidden') return false
+          if (typeof document.hasFocus === 'function' && document.hasFocus() === false) return false
+          return true
         },
         clearHistory() {
           for (const entry of active) clearTimer(entry)
@@ -524,7 +590,7 @@ window.__ModuleLoader__.load({
       return { requestPermission, notify, permission }
     }
 
-    function createLink(store, chime, notifier) {
+    function createLink(store, chime, notifier, presenter) {
       let source
       let disposed = false
       const clientId = Math.random().toString(36).slice(2, 10)
@@ -572,17 +638,9 @@ window.__ModuleLoader__.load({
       }
 
       function handle(entry) {
-        const isNews = store.add(entry) !== undefined
-        if (!isNews) return
-        if (store.muted() || entry.silent === true) return
-        const config = store.state.config
-        const sound = config?.sound !== false
-        const shown = notifier.notify(entry)
-        // The system notification already rang; only add the chime when nothing
-        // else made a noise (or when the user explicitly asked for both).
-        if (sound && (shown === false || config?.chimeWithOsToast === true)) {
-          chime.play(entry.kind, config?.volume ?? 0.6)
-        }
+        // Backlog and duplicates only reach the history, never the screen.
+        if (store.add(entry) === undefined) return
+        if (presenter !== undefined && typeof presenter.fn === 'function') presenter.fn(entry)
       }
 
       async function start() {
@@ -599,6 +657,14 @@ window.__ModuleLoader__.load({
                 // Ignore malformed frames.
               }
             })
+            source.addEventListener('read', (event) => {
+              try {
+                store.applyRead(JSON.parse(event.data)?.seqs)
+              } catch {
+                // Ignore malformed frames.
+              }
+            })
+            source.addEventListener('clear', () => store.clearHistory())
             source.addEventListener('error', () => store.setConnected(false))
           } catch {
             store.setConnected(false)
@@ -651,6 +717,10 @@ window.__ModuleLoader__.load({
 .dfh-pop__empty{padding:18px 12px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12.5px}
 .dfh-row{display:flex;gap:9px;padding:8px;border-radius:8px;cursor:pointer}
 .dfh-row:hover{background:var(--dsw-alias-bg-layer-2)}
+.dfh-row--unread{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,transparent)}
+.dfh-row--unread .dfh-row__title{font-weight:700}
+.dfh-row--read{opacity:.6}
+.dfh-row__dot{flex:none;width:6px;height:6px;border-radius:3px;background:var(--dsw-alias-brand-primary);margin-top:10px}
 .dfh-row__icon{flex:none;width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;background:color-mix(in srgb,currentColor 12%,transparent)}
 .dfh-row__body{min-width:0;flex:1}
 .dfh-row__title{font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px}
@@ -704,7 +774,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function ToastStack({ store, text, jump }) {
+    function ToastStack({ store, text, jump, markRead }) {
       const state = useStore(store)
       const toasts = store.active.slice()
       if (toasts.length === 0 && state.history.length === 0) return h(Styles)
@@ -722,6 +792,7 @@ window.__ModuleLoader__.load({
                 key: `${entry.seq}`,
                 className: 'dfh-toast',
                 onClick: () => {
+                  markRead([entry.seq])
                   store.dismiss(entry)
                   jump(entry)
                 },
@@ -752,14 +823,28 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Bell({ store, text, link, notifier, jump, chime }) {
+    /**
+     * Invisible reporter registered in a session-scoped slot. It is how the
+     * client learns which Conversation is open, without reading shell DOM.
+     */
+    function SessionObserver({ sessionId, onActiveSession }) {
+      React.useEffect(() => {
+        onActiveSession(sessionId)
+        return () => onActiveSession(undefined)
+      }, [sessionId, onActiveSession])
+      return null
+    }
+
+    function Bell({ store, text, link, notifier, jump, chime, markRead, markAllRead, clearAll }) {
       const state = useStore(store)
       const [open, setOpen] = React.useState(false)
       const [view, setView] = React.useState('list')
+      const [onlyUnread, setOnlyUnread] = React.useState(false)
       const [rect, setRect] = React.useState(undefined)
       const buttonRef = React.useRef(null)
-      const unread = state.history.length
+      const unread = store.unread()
       const badge = unread > 9 ? '9+' : String(unread)
+      const rows = onlyUnread ? state.history.filter((entry) => entry.read !== true) : state.history
 
       const openPanel = () => {
         const node = buttonRef.current
@@ -838,7 +923,20 @@ window.__ModuleLoader__.load({
                       ),
                       h('span', { style: { flex: 1 } }, text.t('settings.title')),
                     )
-                  : h('span', null, text.t('bell.tooltip')),
+                  : h(
+                      React.Fragment,
+                      null,
+                      h('span', { style: { flex: 1 } }, unread > 0 ? `${text.t('bell.tooltip')} · ${unread}` : text.t('bell.tooltip')),
+                      h(
+                        'button',
+                        {
+                          className: onlyUnread ? 'dfh-btn dfh-btn--primary' : 'dfh-btn',
+                          type: 'button',
+                          onClick: () => setOnlyUnread((value) => !value),
+                        },
+                        text.t('bell.onlyUnread'),
+                      ),
+                    ),
                 h(
                   'button',
                   {
@@ -851,24 +949,26 @@ window.__ModuleLoader__.load({
                 ),
               ),
               view === 'settings'
-                ? h('div', { className: 'dfh-pop__body' }, h(Settings, { store, text, link, notifier, jump, chime }))
+                ? h('div', { className: 'dfh-pop__body' }, h(Settings, { store, text, link, notifier, jump, chime, markRead, clearAll }))
                 : h(
                 'div',
                 { className: 'dfh-pop__list' },
-                state.history.length === 0
-                  ? h('div', { className: 'dfh-pop__empty' }, text.t('bell.empty'))
-                  : state.history.map((entry) =>
+                rows.length === 0
+                  ? h('div', { className: 'dfh-pop__empty' }, onlyUnread ? text.t('bell.noUnread') : text.t('bell.empty'))
+                  : rows.map((entry) =>
                       h(
                         'div',
                         {
                           key: `${entry.seq}`,
-                          className: 'dfh-row',
+                          className: entry.read === true ? 'dfh-row dfh-row--read' : 'dfh-row dfh-row--unread',
                           onClick: () => {
+                            markRead([entry.seq])
                             setOpen(false)
                             store.dismiss(entry)
                             jump(entry)
                           },
                         },
+                        entry.read === true ? null : h('span', { className: 'dfh-row__dot', 'aria-hidden': true }),
                         h(KindIcon, { kind: entry.kind, size: 24 }),
                         h(
                           'div',
@@ -888,7 +988,11 @@ window.__ModuleLoader__.load({
                 store.muted()
                   ? h('button', { className: 'dfh-btn', type: 'button', onClick: () => void mute(0) }, text.t('bell.unmute'))
                   : h('button', { className: 'dfh-btn', type: 'button', onClick: () => void mute(60) }, text.t('bell.mute')),
-                h('button', { className: 'dfh-btn', type: 'button', onClick: () => store.clearHistory() }, text.t('bell.markAll')),
+                h(
+                  'button',
+                  { className: 'dfh-btn', type: 'button', disabled: unread === 0, onClick: () => markAllRead() },
+                  text.t('bell.markAll'),
+                ),
                 h(
                   'button',
                   {
@@ -913,7 +1017,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Settings({ store, text, link, notifier, jump, chime }) {
+    function Settings({ store, text, link, notifier, jump, chime, markRead, clearAll }) {
       const state = useStore(store)
       const [busy, setBusy] = React.useState(false)
       const config = state.config
@@ -1094,7 +1198,10 @@ window.__ModuleLoader__.load({
                     {
                       key: `${entry.seq}`,
                       className: 'dfh-row',
-                      onClick: () => jump(entry),
+                      onClick: () => {
+                        if (typeof markRead === 'function') markRead([entry.seq])
+                        jump(entry)
+                      },
                     },
                     h(KindIcon, { kind: entry.kind, size: 24 }),
                     h(
@@ -1110,7 +1217,15 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dfh-actions' },
-            h('button', { className: 'dfh-btn', type: 'button', onClick: () => store.clearHistory() }, text.t('settings.clear')),
+            h(
+              'button',
+              {
+                className: 'dfh-btn',
+                type: 'button',
+                onClick: () => (typeof clearAll === 'function' ? clearAll() : store.clearHistory()),
+              },
+              text.t('settings.clear'),
+            ),
           ),
         ),
       )
@@ -1139,16 +1254,60 @@ window.__ModuleLoader__.load({
         // `reveal` needs `link`, `link` needs `notifier`, `notifier` needs
         // `reveal`: bind it late through one holder instead of reordering.
         const revealHolder = { reveal: (entry) => jump(entry) }
+        // Same trick for the incoming-notification presenter, which needs
+        // `markRead` (and therefore `link`).
+        const presenter = { fn: undefined }
         const notifier = createNotifier(store, text, jump, (entry) => revealHolder.reveal(entry))
-        const link = createLink(store, chime, notifier)
+        const link = createLink(store, chime, notifier, presenter)
         revealHolder.reveal = (entry) => {
           jump(entry)
+          if (entry?.seq !== undefined) markRead([entry.seq])
           try {
             window.focus()
           } catch {
             // Best effort; the Host is what actually restores a hidden window.
           }
           void link.post('/dsh-feedback-hub/reveal', { sessionId: entry?.sessionId }).catch(() => {})
+        }
+
+        // The Host owns read state so it survives reloads and is shared by tabs;
+        // these helpers update the local mirror first, then tell the Host.
+        const markRead = (seqs) => {
+          if (!Array.isArray(seqs) || seqs.length === 0) return
+          store.applyRead(seqs)
+          void link.post('/dsh-feedback-hub/read', { seqs }).catch(() => {})
+        }
+        const markAllRead = () => {
+          store.applyReadAll()
+          void link.post('/dsh-feedback-hub/read', { all: true }).catch(() => {})
+        }
+        const clearAll = () => {
+          store.clearHistory()
+          void link.post('/dsh-feedback-hub/clear', {}).catch(() => {})
+        }
+        /** A session became the open one: everything about it is now read. */
+        const onActiveSession = (sessionId) => {
+          const changed = store.setActiveSession(sessionId)
+          if (!changed || typeof sessionId !== 'string' || sessionId === '') return
+          if (store.applyReadForSession(sessionId) === 0) return
+          void link.post('/dsh-feedback-hub/read', { sessionId }).catch(() => {})
+        }
+
+        presenter.fn = (entry) => {
+          // Already looking at that session: no toast, no sound — just read.
+          if (store.isViewing(entry.sessionId)) {
+            markRead([entry.seq])
+            return
+          }
+          if (store.muted() || entry.silent === true) return
+          const config = store.state.config
+          const sound = config?.sound !== false
+          const shown = notifier.notify(entry)
+          // The system notification already rang; only add the chime when nothing
+          // else made a noise (or when the user explicitly asked for both).
+          if (sound && (shown === false || config?.chimeWithOsToast === true)) {
+            chime.play(entry.kind, config?.volume ?? 0.6)
+          }
         }
 
         // Audio needs one gesture before it may play.
@@ -1175,10 +1334,10 @@ window.__ModuleLoader__.load({
             ctx.slots.register({ name: slot, id, order, ...(label === undefined ? {} : { label }) }, Component),
           )
 
-        disposable.push(register('shell.overlay', 'dsh-feedback-hub.toasts', 80, () => h(ToastStack, { store, text, jump })))
+        disposable.push(register('shell.overlay', 'dsh-feedback-hub.toasts', 80, () => h(ToastStack, { store, text, jump, markRead })))
         disposable.push(
           register('sidebar.footer.action', 'dsh-feedback-hub.bell', 20, () =>
-            h(Bell, { store, text, link, notifier, jump, chime }),
+            h(Bell, { store, text, link, notifier, jump, chime, markRead, markAllRead, clearAll }),
           ),
         )
         disposable.push(
@@ -1186,8 +1345,15 @@ window.__ModuleLoader__.load({
             'settings.section',
             'dsh-feedback-hub',
             70,
-            () => h(Settings, { store, text, link, notifier, jump, chime }),
+            () => h(Settings, { store, text, link, notifier, jump, chime, markRead, clearAll }),
             () => text.t('settings.title'),
+          ),
+        )
+        // An invisible reporter in a session-scoped slot: it is how the client
+        // learns which Conversation is on screen, without touching shell DOM.
+        disposable.push(
+          register('conversation.composer.dock', 'dsh-feedback-hub.session', 900, (props) =>
+            h(SessionObserver, { sessionId: props?.sessionId, onActiveSession }),
           ),
         )
 

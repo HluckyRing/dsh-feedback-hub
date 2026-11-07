@@ -59,6 +59,8 @@
 | POST | `/dsh-feedback-hub/test` | 设置页测试按钮，走同一条分发管线（`force: true`，绕过开关/去重/静音） | 同上 |
 | POST | `/dsh-feedback-hub/mute` | `{ minutes }`，0 = 取消静音 | 同上 |
 | POST | `/dsh-feedback-hub/reveal` | 点击通知时把窗口拉回前台并聚焦；返回走了哪条策略 | 同上 |
+| POST | `/dsh-feedback-hub/read` | 标记已读：`{ seqs }` / `{ sessionId }` / `{ all: true }`，返回实际变更的 seq | 同上 |
+| POST | `/dsh-feedback-hub/clear` | 清空历史（从 Host 内存删除） | 同上 |
 
 要求自定义请求头是为了让浏览器**强制跨域预检**：别的网页无法在用户不知情时触发我们的 POST。
 
@@ -73,6 +75,23 @@
 ```
 
 页面的“在线”有 60s 有效期：`presence` 停止上报后自动失效，避免页面卡死时再也收不到通知。
+
+## 已读状态归谁管
+
+**Host 是唯一真源**：环形缓冲里的每条通知带 `read` / `readAt`，页面只是镜像。
+
+- 页面标记已读时先本地更新（即时反馈），再 `POST /read`；Host 更新后通过 SSE
+  `event: read` 广播 `{ seqs }`，其他标签页同步；
+- 清空同理，Host 广播 `event: clear`，所有页面一起清；
+- 刷新页面后 `/snapshot` 带回 `read` 字段，所以不会全部变回未读。
+
+“用户正看着哪个会话”只有页面知道，所以由客户端上报：在**会话级槽位**
+`conversation.composer.dock`（`scope: session`，standardProps 里带 `sessionId`）
+注册一个**渲染为 `null` 的观察组件**，它挂载时告知 store 当前会话、卸载时清空。
+这条路不读 shell DOM、不订阅会话日志，切换会话时自动触发“该会话全部已读”。
+
+到达时的分流规则在客户端：`isViewing(sessionId)`（同一会话 + 页面可见 + 聚焦）为真
+则直接标已读并跳过浮窗/声音/系统通知，否则走正常提醒。
 
 ## 点击通知 → 唤起窗口 + 跳会话
 

@@ -22,6 +22,7 @@ import {
   buildRevealScript,
   buildToastScript,
   buildToastXml,
+  collectReadTargets,
   formatDuration,
   resolveConfig,
   shouldDeliver,
@@ -304,7 +305,7 @@ class FeedbackHub {
 
     const muted = this.mutedUntil > now
     const silent = muted || verdict.quiet || this.settings.sound === false
-    const entry = this.buffer.push({ ...event, quiet: verdict.quiet, muted, silent })
+    const entry = this.buffer.push({ ...event, quiet: verdict.quiet, muted, silent, read: false })
     this.broadcast(entry)
     this.maybeToast(entry)
     return entry
@@ -312,8 +313,13 @@ class FeedbackHub {
 
   /** @param {{ seq: number }} entry */
   broadcast(entry) {
+    this.broadcastFrame('notification', entry)
+  }
+
+  /** One SSE frame to every page; a broken socket is simply dropped. */
+  broadcastFrame(event, payload) {
     if (this.subscribers.size === 0) return
-    const frame = `event: notification\ndata: ${JSON.stringify(entry)}\n\n`
+    const frame = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`
     for (const subscriber of this.subscribers) {
       try {
         subscriber.res.write(frame)
@@ -321,6 +327,34 @@ class FeedbackHub {
         this.subscribers.delete(subscriber)
       }
     }
+  }
+
+  /**
+   * Flip history entries to read. The Host owns this flag so it survives a page
+   * reload and is shared by every open tab.
+   * @returns the seqs that actually changed
+   */
+  markRead(request) {
+    const items = this.buffer.all()
+    const seqs = collectReadTargets(items, request ?? {})
+    if (seqs.length === 0) return []
+    const changed = new Set(seqs)
+    const now = Date.now()
+    for (const item of items) {
+      if (!changed.has(item.seq)) continue
+      item.read = true
+      item.readAt = now
+    }
+    this.broadcastFrame('read', { seqs })
+    return seqs
+  }
+
+  /** Drop the whole history; pages clear themselves when they see the frame. */
+  clearHistory() {
+    const cleared = this.buffer.all().length
+    this.buffer.clear()
+    this.broadcastFrame('clear', { cleared })
+    return cleared
   }
 
   heartbeat() {
@@ -586,6 +620,8 @@ class FeedbackHub {
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/test`, handler: (req, res) => this.handleTest(req, res) }),
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/mute`, handler: (req, res) => this.handleMute(req, res) }),
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/reveal`, handler: (req, res) => this.handleReveal(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/read`, handler: (req, res) => this.handleRead(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/clear`, handler: (req, res) => this.handleClear(req, res) }),
     ]
     return () => {
       for (const dispose of disposers) dispose()
@@ -714,6 +750,39 @@ class FeedbackHub {
     const body = (await readJsonBody(req)) ?? {}
     const revealed = await this.revealWindow()
     sendJson(res, 200, { ...revealed, sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined })
+  }
+
+  /** Mark history read: `{ seqs: [...] }`, `{ sessionId }` or `{ all: true }`. */
+  async handleRead(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'POST only' })
+      return
+    }
+    if (req.headers['x-dsh-feedback-hub'] !== '1') {
+      sendJson(res, 403, { ok: false, error: 'missing plugin header' })
+      return
+    }
+    const body = (await readJsonBody(req)) ?? {}
+    const seqs = this.markRead({
+      seqs: Array.isArray(body.seqs) ? body.seqs : undefined,
+      sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
+      all: body.all === true,
+    })
+    sendJson(res, 200, { ok: true, seqs })
+  }
+
+  /** Drop the whole history (and tell every page). */
+  async handleClear(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'POST only' })
+      return
+    }
+    if (req.headers['x-dsh-feedback-hub'] !== '1') {
+      sendJson(res, 403, { ok: false, error: 'missing plugin header' })
+      return
+    }
+    const cleared = this.clearHistory()
+    sendJson(res, 200, { ok: true, cleared })
   }
 }
 

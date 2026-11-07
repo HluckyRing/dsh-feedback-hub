@@ -120,6 +120,14 @@ events:
   workflow-end: true
 ```
 
+## 已读语义
+
+- 新通知默认**未读**；铃铛角标只数未读。
+- 点浮窗、点系统通知、点铃铛条目 → 该条已读。
+- 切到某个会话 → 该会话的历史通知全部已读。
+- 通知到达时你**正看着**那个会话（页面可见且聚焦）→ 直接已读，不弹浮窗、不出声、不发系统通知。
+- 「全部已读」与「清空历史」是分开的两个动作；已读状态存在 Host 内存里，刷新页面不丢。
+
 ## 与 `plugin_manager` 的关系
 
 - `install_bundle` 把本仓库以 `link:` 依赖写进 profile 的 `package.json`，并把 `dsh-feedback-hub` 加进 `dsh.profile.bundles`；插件行由**仓库自带的** `cordis.patch.yml` 提供；

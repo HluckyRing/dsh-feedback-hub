@@ -20,6 +20,7 @@ import {
   buildRevealScript,
   buildToastScript,
   buildToastXml,
+  collectReadTargets,
   dedupeKey,
   formatDuration,
   inQuietHours,
@@ -245,6 +246,22 @@ test('resolveConfig defaults the reveal behaviour', () => {
   assert.equal(resolveConfig({ revealOnClick: false }).revealOnClick, false)
   assert.equal(resolveConfig({}).windowProcessName, 'DeepSeek Harness')
   assert.equal(resolveConfig({ windowProcessName: '  ' }).windowProcessName, 'DeepSeek Harness')
+})
+
+test('collectReadTargets resolves seqs, session and all', () => {
+  const items = [
+    { seq: 1, sessionId: 'a', read: false },
+    { seq: 2, sessionId: 'b', read: false },
+    { seq: 3, sessionId: 'a', read: true },
+    { seq: 4, sessionId: 'a' },
+  ]
+  assert.deepEqual(collectReadTargets(items, { seqs: [2] }), [2])
+  assert.deepEqual(collectReadTargets(items, { sessionId: 'a' }), [1, 4])
+  assert.deepEqual(collectReadTargets(items, { all: true }), [1, 2, 4])
+  assert.deepEqual(collectReadTargets(items, {}), [])
+  assert.deepEqual(collectReadTargets(items, { seqs: [3] }), [], 'already read entries are never returned')
+  assert.deepEqual(collectReadTargets(undefined, { all: true }), [])
+  assert.deepEqual(collectReadTargets(items, { seqs: ['x', 1] }), [1])
 })
 
 test('RingBuffer numbers entries and reports incremental reads', () => {

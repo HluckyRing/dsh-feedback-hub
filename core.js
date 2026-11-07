@@ -384,6 +384,29 @@ export function buildRevealScript({ processName }) {
   ].join('\r\n')
 }
 /**
+ * Which entries a read-mark request flips. Explicit seqs, everything belonging
+ * to one session, or the whole history — the caller decides, this only resolves.
+ * Entries that are already read are never returned.
+ * @param {Array<{ seq: number, sessionId?: string, read?: boolean }>} items
+ * @param {{ seqs?: number[], sessionId?: string, all?: boolean }} request
+ * @returns {number[]}
+ */
+export function collectReadTargets(items, request) {
+  if (!Array.isArray(items)) return []
+  const wanted = new Set(
+    Array.isArray(request?.seqs) ? request.seqs.filter((value) => typeof value === 'number' && Number.isFinite(value)) : [],
+  )
+  const bySession = typeof request?.sessionId === 'string' && request.sessionId !== ''
+  const targets = []
+  for (const item of items) {
+    if (item === null || typeof item !== 'object' || item.read === true) continue
+    const hit = request?.all === true || wanted.has(item.seq) || (bySession && item.sessionId === request.sessionId)
+    if (hit) targets.push(item.seq)
+  }
+  return targets
+}
+
+/**
  * Bounded, monotonically numbered buffer. `seq` is the cursor the page sends
  * back when it reconnects, so a short disconnect loses nothing.
  * @template T
