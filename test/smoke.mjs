@@ -17,6 +17,7 @@ import {
   DEFAULT_CONFIG,
   EVENT_KINDS,
   RingBuffer,
+  buildRevealScript,
   buildToastScript,
   buildToastXml,
   dedupeKey,
@@ -230,6 +231,21 @@ test('resolveConfig validates the chime volume', () => {
 })
 
 // -------------------------------------------------------------- ring buffer
+
+test('buildRevealScript is ASCII-only and matches the configured process', () => {
+  const script = buildRevealScript({ processName: 'DeepSeek Harness' })
+  assert.ok(script.includes("[DhReveal]::Find('DeepSeek Harness')"))
+  assert.ok(script.includes('exit 3'))
+  assert.ok(/^[\x09\x0A\x0D\x20-\x7E]*$/.test(script), 'reveal script must be ASCII only')
+  assert.ok(buildRevealScript({ processName: "a'b" }).includes("[DhReveal]::Find('a''b')"))
+})
+
+test('resolveConfig defaults the reveal behaviour', () => {
+  assert.equal(resolveConfig({}).revealOnClick, true)
+  assert.equal(resolveConfig({ revealOnClick: false }).revealOnClick, false)
+  assert.equal(resolveConfig({}).windowProcessName, 'DeepSeek Harness')
+  assert.equal(resolveConfig({ windowProcessName: '  ' }).windowProcessName, 'DeepSeek Harness')
+})
 
 test('RingBuffer numbers entries and reports incremental reads', () => {
   const buffer = new RingBuffer(3)

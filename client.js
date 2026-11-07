@@ -62,6 +62,7 @@ window.__ModuleLoader__.load({
         'settings.test.send': '测试',
         'settings.test.preview': '试听提示音',
         'settings.test.delayed': '5 秒后测试（先切走窗口）',
+        'settings.test.reveal': '测试唤起窗口',
         'settings.grant': '允许桌面通知',
         'settings.granted': '桌面通知已开启',
         'settings.mute': '静音 1 小时',
@@ -116,6 +117,7 @@ window.__ModuleLoader__.load({
         'settings.test.send': 'Test',
         'settings.test.preview': 'Play chime',
         'settings.test.delayed': 'Test in 5s (switch away first)',
+        'settings.test.reveal': 'Test reveal window',
         'settings.grant': 'Enable desktop notifications',
         'settings.granted': 'Desktop notifications enabled',
         'settings.mute': 'Mute for 1 hour',
@@ -459,7 +461,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function createNotifier(store, text, jump) {
+    function createNotifier(store, text, jump, reveal) {
       const permission = () => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
 
       async function requestPermission() {
@@ -506,12 +508,10 @@ window.__ModuleLoader__.load({
             urgency: important ? 'critical' : 'normal',
           })
           notification.onclick = () => {
-            try {
-              window.focus()
-            } catch {
-              // focus is best effort
-            }
-            jump(entry)
+            // `reveal` asks the Host to pull the window out of the tray, which a
+            // renderer cannot do on its own; it also navigates to the session.
+            if (typeof reveal === 'function') reveal(entry)
+            else jump(entry)
             notification.close()
           }
           return true
@@ -1068,6 +1068,15 @@ window.__ModuleLoader__.load({
               },
               text.t('settings.test.delayed'),
             ),
+            h(
+              'button',
+              {
+                className: 'dfh-btn',
+                type: 'button',
+                onClick: () => void link.post('/dsh-feedback-hub/reveal', {}).catch(() => {}),
+              },
+              text.t('settings.test.reveal'),
+            ),
           ),
         ),
         h(
@@ -1127,8 +1136,20 @@ window.__ModuleLoader__.load({
           }
         }
 
-        const notifier = createNotifier(store, text, jump)
+        // `reveal` needs `link`, `link` needs `notifier`, `notifier` needs
+        // `reveal`: bind it late through one holder instead of reordering.
+        const revealHolder = { reveal: (entry) => jump(entry) }
+        const notifier = createNotifier(store, text, jump, (entry) => revealHolder.reveal(entry))
         const link = createLink(store, chime, notifier)
+        revealHolder.reveal = (entry) => {
+          jump(entry)
+          try {
+            window.focus()
+          } catch {
+            // Best effort; the Host is what actually restores a hidden window.
+          }
+          void link.post('/dsh-feedback-hub/reveal', { sessionId: entry?.sessionId }).catch(() => {})
+        }
 
         // Audio needs one gesture before it may play.
         const unlock = () => chime.unlock()

@@ -13,11 +13,13 @@
 
 import { spawn } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 
 import {
   RingBuffer,
+  buildRevealScript,
   buildToastScript,
   buildToastXml,
   formatDuration,
@@ -440,6 +442,139 @@ class FeedbackHub {
     }
   }
 
+  /**
+   * Resolve the Electron API, if this Host runs inside an Electron main process.
+   *
+   * Two shapes matter: `import('electron')` in an ESM context yields a namespace
+   * whose default export is the binary path (not the API), while
+   * `createRequire(...)('electron')` yields the familiar CJS API object. Try the
+   * dynamic import first and fall back to `require`, then report a shape
+   * diagnostic instead of failing silently.
+   */
+  async electronApi() {
+    const pick = (candidate) => {
+      if (candidate === null || candidate === undefined) return undefined
+      if (typeof candidate.BrowserWindow?.getAllWindows === 'function') return candidate
+      const fallback = candidate.default
+      if (fallback !== undefined && fallback !== null && typeof fallback.BrowserWindow?.getAllWindows === 'function') return fallback
+      return undefined
+    }
+    const shape = (candidate) => ({
+      type: typeof candidate,
+      keys: candidate !== null && typeof candidate === 'object' ? Object.keys(candidate).slice(0, 12) : [],
+      defaultType: typeof candidate?.default,
+    })
+
+    try {
+      const imported = await import('electron')
+      const api = pick(imported)
+      if (api !== undefined) return { api, via: 'import' }
+    } catch (error) {
+      // Not in Electron, or the module is unavailable in this realm.
+    }
+    try {
+      const fromMain = process.mainModule?.require?.('electron')
+      const api = pick(fromMain)
+      if (api !== undefined) return { api, via: 'mainModule' }
+    } catch (error) {
+      // `process.mainModule` is absent under ESM entry points.
+    }
+    try {
+      const required = createRequire(import.meta.url)('electron')
+      const api = pick(required)
+      if (api !== undefined) return { api, via: 'require' }
+      return { api: undefined, via: 'require', diagnostics: { ...shape(required), electronVersion: process.versions.electron ?? null } }
+    } catch (error) {
+      return { api: undefined, via: 'require', diagnostics: { error: messageOf(error), electronVersion: process.versions.electron ?? null } }
+    }
+  }
+
+  /**
+   * Bring the DSH window back from the tray / taskbar and focus it.
+   *
+   * Two strategies, because the plugin module graph cannot always reach the
+   * Electron API: `revealViaElectron` (fast, in-process) and a Win32 fallback
+   * that enumerates the app's top-level windows, which also works for a window
+   * hidden with `BrowserWindow.hide()`.
+   */
+  async revealWindow() {
+    if (this.settings.revealOnClick !== true) return { ok: false, reason: 'disabled' }
+    const electron = await this.revealViaElectron()
+    if (electron.ok === true) return electron
+    const win32 = await this.revealViaPowerShell()
+    return { ...win32, electron }
+  }
+
+  /** Fast path: call `BrowserWindow` directly when this realm can resolve it. */
+  async revealViaElectron() {
+    const { api, via, diagnostics } = await this.electronApi()
+    if (api === undefined) {
+      return {
+        ok: false,
+        reason: process.versions.electron === undefined ? 'not-electron' : 'unsupported',
+        via,
+        diagnostics,
+      }
+    }
+    let windows
+    try {
+      windows = api.BrowserWindow.getAllWindows().filter((win) => typeof win?.isDestroyed === 'function' && win.isDestroyed() === false)
+    } catch (error) {
+      return { ok: false, reason: 'no-window', via, message: messageOf(error) }
+    }
+    if (windows.length === 0) return { ok: false, reason: 'no-window', via }
+    // Prefer a window that is already visible, then the last created one.
+    const target = windows.find((win) => win.isVisible?.() === true) ?? windows[windows.length - 1]
+    try {
+      if (target.isMinimized?.() === true) target.restore?.()
+      target.show?.()
+      target.focus?.()
+      target.moveTop?.()
+      return { ok: true, via, windows: windows.length }
+    } catch (error) {
+      return { ok: false, reason: 'failed', via, message: messageOf(error) }
+    }
+  }
+
+  /** Fallback: find the app window through Win32 and raise it. Windows only. */
+  async revealViaPowerShell() {
+    if (PLATFORM !== 'win32') return { ok: false, reason: 'platform', via: 'win32' }
+    const script = buildRevealScript({ processName: this.settings.windowProcessName })
+    const file = path.join(os.tmpdir(), `dsh-feedback-hub-reveal-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.ps1`)
+    try {
+      await fsp.writeFile(file, script, 'utf8')
+      const code = await new Promise((resolve) => {
+        const child = spawn(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', file],
+          { stdio: 'ignore', windowsHide: true },
+        )
+        const timer = setTimeout(() => {
+          try {
+            child.kill()
+          } catch {
+            // already gone
+          }
+          resolve(-2)
+        }, 8_000)
+        const settle = (value) => {
+          clearTimeout(timer)
+          resolve(value)
+        }
+        child.once('error', () => settle(-1))
+        child.once('close', (exitCode) => settle(exitCode ?? -1))
+        child.unref?.()
+      })
+      fsp.rm(file, { force: true }).catch(() => {})
+      if (code === 0) return { ok: true, via: 'win32' }
+      // The script exits 3 when no window of that process exists.
+      return { ok: false, reason: code === 3 ? 'no-window' : 'failed', via: 'win32', code }
+    } catch (error) {
+      fsp.rm(file, { force: true }).catch(() => {})
+      return { ok: false, reason: 'failed', via: 'win32', message: messageOf(error) }
+    }
+  }
+
   // ----------------------------------------------------------------- routes
 
   /** @param {any} scoped */
@@ -450,6 +585,7 @@ class FeedbackHub {
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/presence`, handler: (req, res) => this.handlePresence(req, res) }),
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/test`, handler: (req, res) => this.handleTest(req, res) }),
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/mute`, handler: (req, res) => this.handleMute(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/reveal`, handler: (req, res) => this.handleReveal(req, res) }),
     ]
     return () => {
       for (const dispose of disposers) dispose()
@@ -504,6 +640,7 @@ class FeedbackHub {
         sound: this.settings.sound,
         volume: this.settings.volume,
         chimeWithOsToast: this.settings.chimeWithOsToast,
+        revealOnClick: this.settings.revealOnClick,
         toastDurationMs: this.settings.toastDurationMs,
         historyLimit: this.settings.historyLimit,
       },
@@ -562,6 +699,21 @@ class FeedbackHub {
     const minutes = Number.isFinite(body.minutes) ? Math.min(24 * 60, Math.max(0, Math.round(body.minutes))) : 0
     this.mutedUntil = minutes === 0 ? 0 : Date.now() + minutes * 60_000
     sendJson(res, 200, { ok: true, mutedUntil: this.mutedUntil })
+  }
+
+  /** Bring the window back after a notification click; also reports the session. */
+  async handleReveal(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'POST only' })
+      return
+    }
+    if (req.headers['x-dsh-feedback-hub'] !== '1') {
+      sendJson(res, 403, { ok: false, error: 'missing plugin header' })
+      return
+    }
+    const body = (await readJsonBody(req)) ?? {}
+    const revealed = await this.revealWindow()
+    sendJson(res, 200, { ...revealed, sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined })
   }
 }
 

@@ -47,6 +47,10 @@ export const DEFAULT_CONFIG = {
   volume: 0.6,
   /** Play the chime even when a system notification already rings. */
   chimeWithOsToast: false,
+  /** Clicking a notification brings the DSH window back (desktop only). */
+  revealOnClick: true,
+  /** Window-process name used by the Win32 reveal fallback (desktop app's exe name). */
+  windowProcessName: 'DeepSeek Harness',
   /** Android/Windows toast identity; the DSH desktop app's own AUMID by default. */
   toastAppId: 'com.deepseek.dsh',
   /** How long an in-app toast stays on screen. */
@@ -112,6 +116,11 @@ export function resolveConfig(raw) {
     sound: input.sound !== false,
     volume,
     chimeWithOsToast: input.chimeWithOsToast === true,
+    revealOnClick: input.revealOnClick !== false,
+    windowProcessName:
+      typeof input.windowProcessName === 'string' && input.windowProcessName.trim() !== ''
+        ? input.windowProcessName.trim()
+        : DEFAULT_CONFIG.windowProcessName,
     toastAppId,
   }
 }
@@ -314,6 +323,66 @@ export function shouldDeliver({ config, event, seen, now }) {
   return { deliver: true, quiet: inQuietHours(config.quietHours, now) }
 }
 
+/**
+ * PowerShell that finds the app's top-level window — including one hidden to the
+ * tray, which `Get-Process.MainWindowHandle` reports as `0` — and raises it.
+ *
+ * Exit code: `0` revealed, `3` no window found, anything else failure. The script
+ * is pure ASCII so PowerShell 5.1 cannot misread its encoding.
+ * @param {{ processName?: string }} input
+ */
+export function buildRevealScript({ processName }) {
+  const name = String(processName ?? DEFAULT_CONFIG.windowProcessName).replace(/'/g, "''")
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    'Add-Type -TypeDefinition @\'',
+    'using System;',
+    'using System.Collections.Generic;',
+    'using System.Diagnostics;',
+    'using System.Runtime.InteropServices;',
+    'public static class DhReveal {',
+    '  private delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);',
+    '  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr l);',
+    '  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);',
+    '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowTextLength(IntPtr h);',
+    '  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);',
+    '  [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr h, int c);',
+    '  [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr h);',
+    '  [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr h);',
+    '  [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);',
+    '  public static IntPtr Find(string processName) {',
+    '    var ids = new HashSet<uint>();',
+    '    foreach (var p in Process.GetProcessesByName(processName)) ids.Add((uint)p.Id);',
+    '    if (ids.Count == 0) return IntPtr.Zero;',
+    '    IntPtr hidden = IntPtr.Zero;',
+    '    IntPtr shown = IntPtr.Zero;',
+    '    EnumWindows(delegate (IntPtr h, IntPtr l) {',
+    '      uint pid; GetWindowThreadProcessId(h, out pid);',
+    '      if (!ids.Contains(pid)) return true;',
+    '      if (GetWindowTextLength(h) == 0) return true;',
+    '      if (IsWindowVisible(h)) { if (shown == IntPtr.Zero) shown = h; }',
+    '      else if (hidden == IntPtr.Zero) hidden = h;',
+    '      return true;',
+    '    }, IntPtr.Zero);',
+    '    return shown != IntPtr.Zero ? shown : hidden;',
+    '  }',
+    '  public static void Raise(IntPtr h) {',
+    '    ShowWindow(h, 9);',
+    '    ShowWindow(h, 5);',
+    '    BringWindowToTop(h);',
+    '    SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 3);',
+    '    SetWindowPos(h, new IntPtr(-2), 0, 0, 0, 0, 3);',
+    '    SetForegroundWindow(h);',
+    '  }',
+    '}',
+    "'@",
+    `$handle = [DhReveal]::Find('${name}')`,
+    'if ($handle -eq [IntPtr]::Zero) { exit 3 }',
+    '[DhReveal]::Raise($handle)',
+    'exit 0',
+    '',
+  ].join('\r\n')
+}
 /**
  * Bounded, monotonically numbered buffer. `seq` is the cursor the page sends
  * back when it reconnects, so a short disconnect loses nothing.

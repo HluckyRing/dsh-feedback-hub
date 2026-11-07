@@ -30,6 +30,8 @@
     sound: true
     volume: 0.6
     chimeWithOsToast: false
+    revealOnClick: true
+    windowProcessName: 'DeepSeek Harness'
     toastAppId: com.deepseek.dsh
     toastDurationMs: 8000
     historyLimit: 100
@@ -53,6 +55,8 @@
 | `sound` | boolean | `true` | 提示音。窗口失焦/隐藏时会由系统通知发声，窗口聚焦时用应用内合成音 |
 | `volume` | number | `0.6` | 应用内提示音音量（0.05–1）。窗口失焦时如果系统通知已发声，默认不再叠一次 |
 | `chimeWithOsToast` | boolean | `false` | 系统通知已经响过时，是否**再**播一次应用内提示音（默认不叠音，避免两种音效打架） |
+| `revealOnClick` | boolean | `true` | 点击系统通知时把 DSH 窗口从托盘/最小化拉回来并聚焦。关掉则点击只跳转、不唤窗 |
+| `windowProcessName` | string | `DeepSeek Harness` | Win32 兜底查找窗口用的进程名。只有改了应用名/使用定制分支时才需要动 |
 | `toastAppId` | string | `com.deepseek.dsh` | Windows Toast 的 AppUserModelID；默认即 DSH 桌面端身份，显示名会是 “DeepSeek Harness” |
 | `toastDurationMs` | number | `8000` | 应用内浮窗停留时长，范围 1500–60000 |
 | `historyLimit` | number | `100` | Host 内存环形缓冲长度，范围 10–500（不落盘） |
@@ -73,6 +77,10 @@
 `scenario="reminder"` + `duration="long"`（并且页面侧 `timeoutType: 'never'`），
 会一直停在屏幕右下角直到你关掉它 —— 你人在别的程序里也不会错过。
 「任务完成」则用默认的短通知。
+
+**点一下就能回去**：点击系统通知会先把 DSH 窗口从托盘/最小化拉回前台，再切到
+对应会话（`revealOnClick`）。实现上先试 Electron 主进程 API，拿不到就退回 Win32
+窗口枚举 —— 后者对“隐藏到托盘”的窗口同样有效（实测隐藏后再唤起，562ms 完成）。
 
 ## 常见用法
 

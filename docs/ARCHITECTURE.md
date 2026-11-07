@@ -58,6 +58,7 @@
 | POST | `/dsh-feedback-hub/presence` | 页面上报：`clientId`、通知权限、语言、是否隐藏（25s 一次） | 需要 `x-dsh-feedback-hub: 1` |
 | POST | `/dsh-feedback-hub/test` | 设置页测试按钮，走同一条分发管线（`force: true`，绕过开关/去重/静音） | 同上 |
 | POST | `/dsh-feedback-hub/mute` | `{ minutes }`，0 = 取消静音 | 同上 |
+| POST | `/dsh-feedback-hub/reveal` | 点击通知时把窗口拉回前台并聚焦；返回走了哪条策略 | 同上 |
 
 要求自定义请求头是为了让浏览器**强制跨域预检**：别的网页无法在用户不知情时触发我们的 POST。
 
@@ -72,6 +73,32 @@
 ```
 
 页面的“在线”有 60s 有效期：`presence` 停止上报后自动失效，避免页面卡死时再也收不到通知。
+
+## 点击通知 → 唤起窗口 + 跳会话
+
+点击通知时页面做两件事：先本地 `openSession(sessionId)` 把选中项切过去，再
+`POST /reveal` 让 Host 把窗口拉回前台（这两步顺序无关，页面隐藏时导航同样生效）。
+
+窗口为什么必须由 Host 来拉：
+
+- 渲染进程只能 `window.focus()`，它不会把 `BrowserWindow.hide()` 隐藏到托盘的窗口
+  变回来；
+- Host 跑在 Electron 主进程里（`process.versions.electron` 有值），但**插件模块图里
+  拿不到 `electron` 内置模块**：`import('electron')` 在 ESM 下拿到的是二进制路径，
+  `createRequire(import.meta.url)('electron')` 会报 `Cannot find module 'electron'`；
+- 所以实现是两条策略依次尝试：
+
+| 顺序 | 策略 | 说明 |
+|---|---|---|
+| 1 | `revealViaElectron()` | `import` → `process.mainModule.require` → `createRequire`，命中则 `restore/show/focus/moveTop` |
+| 2 | `revealViaPowerShell()` | Win32：`EnumWindows` 按进程名找到应用的顶层窗口（**隐藏的窗口也在枚举结果里**，而 `Get-Process.MainWindowHandle` 为 0），再 `ShowWindow(SW_RESTORE)` + `SW_SHOW` + `BringWindowToTop` + TOPMOST/NOTOPMOST 翻转 + `SetForegroundWindow` |
+
+实测（Windows）：先 `ShowWindow(h, 0)` 隐藏窗口 → 调 `/reveal` →
+`ok: true, via: 'win32'`，窗口重新可见，耗时 562ms。`ok: false, reason: 'no-window'`
+表示找不到该进程的窗口（例如 `dsh web` 无桌面窗口），此时页面侧只做跳转。
+
+脚本同样遵守两条约束：纯 ASCII（避免 PowerShell 5.1 编码误判）、临时文件用完即删；
+进程名可通过 `windowProcessName` 配置（默认 `DeepSeek Harness`）。
 
 ## Windows toast 兜底实现
 
