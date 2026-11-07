@@ -35,8 +35,12 @@ export const DEFAULT_CONFIG = {
     'subagent-end': false,
     'workflow-end': false,
   },
-  /** A finished turn shorter than this is not announced (0 = announce every turn). */
-  turnDoneMinDurationMs: 60_000,
+  /**
+   * A finished turn shorter than this is not announced (0 = announce every turn).
+   * Defaults to 0: "task finished" is worth knowing even for short tasks, and the
+   * session you are actually looking at suppresses it anyway.
+   */
+  turnDoneMinDurationMs: 0,
   /** "23:00-08:00" / "12:00-13:30,18:00-19:00" (comma separated). Empty disables. */
   quietHours: '',
   /** Identical events inside this window collapse into one notification. */

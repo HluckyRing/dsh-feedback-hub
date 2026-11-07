@@ -14,8 +14,9 @@
           error: true
           subagent-end: false
           workflow-end: false
-        # 只有跑满这么久的回合才提醒「任务完成」，避免每轮都响。0 = 每轮都提醒。
-        turnDoneMinDurationMs: 60000
+        # 「任务完成」的门限：只有跑满这么久的回合才提醒。0 = 每轮完成都提醒（默认）。
+        # 想只被长任务打扰可以调大，例如 300000（5 分钟）。
+        turnDoneMinDurationMs: 0
         # 静音时段，例如 "23:00-08:00" 或 "12:00-13:30,18:00-19:00"；空串 = 不启用。
         quietHours: ''
         # 同一事件在这个窗口内只提醒一次（毫秒）。

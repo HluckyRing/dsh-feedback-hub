@@ -51,7 +51,7 @@ function test(name, fn) {
 test('resolveConfig fills defaults', () => {
   const config = resolveConfig(undefined)
   assert.deepEqual(config.events, DEFAULT_CONFIG.events)
-  assert.equal(config.turnDoneMinDurationMs, 60_000)
+  assert.equal(config.turnDoneMinDurationMs, 0)
   assert.equal(config.osToast, 'auto')
   assert.equal(config.sound, true)
   assert.equal(config.quietHours, '')
@@ -127,6 +127,18 @@ test('shouldDeliver skips disabled kinds and too short turns', () => {
   assert.equal(
     shouldDeliver({ config, event: { kind: 'turn-done', durationMs: 90_000 }, seen, now }).deliver,
     true,
+  )
+})
+
+test('the default zero threshold announces every finished turn', () => {
+  const config = resolveConfig({})
+  const verdict = shouldDeliver({ config, event: { kind: 'turn-done', durationMs: 1_200 }, seen: new Map(), now: Date.now() })
+  assert.equal(verdict.deliver, true)
+  // An explicit threshold still filters short turns.
+  const strict = resolveConfig({ turnDoneMinDurationMs: 30_000 })
+  assert.equal(
+    shouldDeliver({ config: strict, event: { kind: 'turn-done', durationMs: 1_200 }, seen: new Map(), now: Date.now() }).deliver,
+    false,
   )
 })
 

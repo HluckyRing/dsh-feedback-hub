@@ -23,7 +23,7 @@
       error: true
       subagent-end: false
       workflow-end: false
-    turnDoneMinDurationMs: 60000
+    turnDoneMinDurationMs: 0
     quietHours: '23:00-08:00'
     dedupeWindowMs: 5000
     osToast: auto
@@ -49,7 +49,7 @@
 | `events.error` | boolean | `true` | 步骤/回合出错时提醒 |
 | `events.subagent-end` | boolean | `false` | 子代理结束时提醒（并行子任务多时会比较吵） |
 | `events.workflow-end` | boolean | `false` | 工作流结束时提醒 |
-| `turnDoneMinDurationMs` | number | `60000` | 完成通知的门限：只有跑满这么久的回合才提醒。下限 0（每轮都提醒），上限 24h |
+| `turnDoneMinDurationMs` | number | `0` | 完成通知的门限：只有跑满这么久的回合才提醒。默认 `0` = 每轮完成都提醒；想只被长任务打扰可调大（如 `300000` = 5 分钟）。上限 24h |
 | `quietHours` | string | `''` | 静音时段，支持多段与跨午夜：`"23:00-08:00"`、`"12:00-13:30,18:00-19:00"`。空串 = 不启用。注意：静音时段内浮窗与历史**仍然记录**，只是不弹系统通知、不出声 |
 | `dedupeWindowMs` | number | `5000` | 同一事件在这个窗口内只提醒一次。判定键 = `类型 + 会话 + 工具名/问题摘要`。范围 0–600000 |
 | `osToast` | enum | `auto` | 系统通知由谁弹：`auto` / `client` / `host` / `off`，见下 |
@@ -96,7 +96,7 @@ events:
   error: true
 ```
 
-**只在长时间任务结束后提醒**
+**只在长时间任务结束后提醒**（默认是每轮都提醒）
 
 ```yaml
 turnDoneMinDurationMs: 300000   # 5 分钟以上才提醒

@@ -24,7 +24,7 @@ DSH 在后台跑长任务时，你切去做了别的事。两种时刻最容易�
 | 6 类事件 | 授权请求、代理提问、回合完成、出错、子代理结束、工作流结束（后两个默认关） |
 | 四条通道 | Windows 系统通知 / 应用内浮窗 / 提示音 / 侧边栏铃铛未读数 |
 | 自动兜底 | 页面在线且已授权 → 页面负责弹；页面不在或无权限 → Host 直接弹系统通知 |
-| 只在不打扰时打扰 | 默认「窗口聚焦只弹浮窗，失焦/隐藏才弹系统通知」；回合完成默认只提醒跑满 60s 的 |
+| 只在不打扰时打扰 | 默认「窗口聚焦只弹浮窗，失焦/隐藏才弹系统通知」；完成通知默认每轮都发，不想被短任务打扰可调 `turnDoneMinDurationMs` |
 | 叫得住人 | 授权/提问的系统通知**常驻屏幕直到你关掉**（reminder 场景），并发系统通知音；应用内音量和「双保险」可配 |
 | 点一下回去 | 点系统通知 → 窗口从托盘/最小化**拉回前台**并切到对应会话（Electron API 优先，失败退回 Win32 枚举） |
 | 已读 / 未读 | 铃铛只数**未读**；点浮窗、点系统通知、点列表条目即已读；「全部已读」和「清空历史」是两件事 |
@@ -42,7 +42,7 @@ DSH 在后台跑长任务时，你切去做了别的事。两种时刻最容易�
 |---|---|---|
 | `approval/request` | 工具调用需要你授权 | ✅ |
 | `user-questions/request` | 代理提问 / 计划确认 / 内联审批 | ✅ |
-| `agent/status` → idle | 本轮任务完成（跑满 `turnDoneMinDurationMs` 才提醒） | ✅ |
+| `agent/status` → idle | 本轮任务完成（默认每轮都提醒；`turnDoneMinDurationMs` 可设最短时长门限） | ✅ |
 | `agent/error` | 步骤或回合出错 | ✅ |
 | `subagent/end` | 子代理结束 | ⬜ |
 | `workflow/end` | 工作流结束 | ⬜ |
@@ -112,7 +112,7 @@ node .githooks/check-secrets.mjs   # 手动自查，退出码 0 才算干净
       error: true
       subagent-end: false
       workflow-end: false
-    turnDoneMinDurationMs: 60000   # 0 = 每轮完成都提醒
+    turnDoneMinDurationMs: 0       # 0 = 每轮完成都提醒；300000 = 只要 5 分钟以上的
     quietHours: ''                 # "23:00-08:00" / "12:00-13:30,18:00-19:00"
     dedupeWindowMs: 5000
     osToast: auto                  # auto | client | host | off
