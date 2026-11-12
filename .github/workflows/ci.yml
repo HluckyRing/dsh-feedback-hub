@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push on the same ref cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The plugin itself only runs on DSH/Windows, but the pure logic and the
+        # bundle manifest must stay platform-neutral.
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check
+        run: |
+          node --check core.js
+          node --check index.js
+          node --check client.js
+          node --check test/smoke.mjs
+
+      - name: Smoke tests
+        run: node test/smoke.mjs
+
+      - name: Secret and privacy guard
+        # Scans every tracked file: this job has no staged changes.
+        run: node .githooks/check-secrets.mjs --all
+
+      - name: Package contents
+        # Fails if `files` points at something that is not in the repo.
+        run: npm pack --dry-run

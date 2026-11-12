@@ -4,6 +4,7 @@
  * 由同目录的 `pre-commit` 调用，也可单独运行：
  *
  *     node .githooks/check-secrets.mjs        # 退出码 0 = 干净，1 = 命中
+ *     node .githooks/check-secrets.mjs --all  # 扫描全部已跟踪文件（CI 用）
  *
  * 拦三类东西：
  *   1) 文件名本身属于密钥 / 私有文件（.env、*.local.md、.dsh-memory/ 等）
@@ -107,18 +108,24 @@ const nameHits = []
 const secretHits = []
 const personalHits = []
 
-let staged = []
+/**
+ * `--all` scans every tracked file (CI has no staged changes); the default scans
+ * what the commit is about to contain.
+ */
+const scanAll = process.argv.includes('--all')
+
+let files = []
 try {
-  staged = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR'])
+  files = (scanAll ? git(['ls-files']) : git(['diff', '--cached', '--name-only', '--diff-filter=ACMR']))
     .split('\n')
     .map((line) => line.trim().replace(/\\/g, '/'))
     .filter(Boolean)
 } catch {
   rmSync(work, { recursive: true, force: true })
-  process.exit(0) // 拿不到暂存清单就不阻断
+  process.exit(0) // 拿不到文件清单就不阻断
 }
 
-for (const file of staged) {
+for (const file of files) {
   for (const [re, label] of NAME_RULES) {
     if (re.test(file)) {
       nameHits.push(`    ${file}  ← 命中文件规则 ${label}`)
@@ -128,7 +135,7 @@ for (const file of staged) {
 
   let content
   try {
-    content = git(['show', `:${file}`])
+    content = scanAll ? readFileSync(join(REPO, file), 'utf8') : git(['show', `:${file}`])
   } catch {
     continue // 读不到就跳过，守卫自身出错不应阻断提交
   }
@@ -174,7 +181,9 @@ if (personalHits.length) {
 }
 
 if (!failed && process.env.PRECOMMIT_VERBOSE === '1') {
-  console.error(`✓ 密钥守卫通过（仓库：${REPO}${sep}，暂存 ${staged.length} 个文件）`)
+  console.error(
+    `✓ 密钥守卫通过（仓库：${REPO}${sep}，${scanAll ? '全部已跟踪' : '暂存'} ${files.length} 个文件）`,
+  )
 }
 
 process.exit(failed ? 1 : 0)

@@ -6,6 +6,7 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-4F7CFF.svg)](LICENSE)
 [![dsh plugin](https://img.shields.io/badge/dsh-plugin-0.4.0-F5A524.svg)](https://github.com/HluckyRing/dsh-feedback-hub)
 [![tests](https://img.shields.io/badge/tests-35%20passed-2ea44f.svg)](test/smoke.mjs)
+[![CI](https://github.com/HluckyRing/dsh-feedback-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/HluckyRing/dsh-feedback-hub/actions/workflows/ci.yml)
 
 ---
 
@@ -169,10 +170,14 @@ node .githooks/check-secrets.mjs   # 手动自查，退出码 0 才算干净
 ## 开发
 
 ```bash
-npm test              # node test/smoke.mjs，29 项纯逻辑 + 打包不变量检查
+npm test              # node test/smoke.mjs，35 项纯逻辑 + 打包不变量检查
 npm run check:syntax  # node --check 三个 JS 文件
 npm run check         # 语法 + 密钥守卫 + 测试
 ```
+
+CI（`.github/workflows/ci.yml`）在每次 push / PR 时于 **ubuntu + windows** 两个平台跑：
+语法检查 → 35 项测试 → 密钥与个人信息守卫（`--all` 扫描全部已跟踪文件）→ `npm pack --dry-run`
+校验发布文件清单。徽章见页首。
 
 目录结构：
 
