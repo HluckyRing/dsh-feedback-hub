@@ -80,6 +80,7 @@ export const DEFAULT_CONFIG = {
 }
 
 const OS_TOAST_MODES = new Set(['auto', 'client', 'host', 'off'])
+const VIEWING_MODES = new Set(['important', 'never'])
 
 /** @param {unknown} value @returns {boolean} */
 function isPlainObject(value) {
@@ -402,6 +403,47 @@ export function buildRevealScript({ processName }) {
     '',
   ].join('\r\n')
 }
+/**
+ * Merge a settings-page patch into an existing config and validate the result.
+ *
+ * The returned object is a *complete* config: the settings page writes it as the
+ * row's raw config, and the Host keeps the same shape in `apply`, so a later
+ * default change cannot silently reinterpret a saved file.
+ * @param {unknown} current
+ * @param {unknown} patch
+ */
+export function applyConfigPatch(current, patch) {
+  const base = resolveConfig(current)
+  const input = isPlainObject(patch) ? patch : {}
+  const eventsInput = isPlainObject(input.events) ? input.events : {}
+  const events = { ...base.events }
+  for (const kind of EVENT_KINDS) {
+    if (typeof eventsInput[kind] === 'boolean') events[kind] = eventsInput[kind]
+  }
+  const merged = {
+    ...base,
+    events,
+    sound: typeof input.sound === 'boolean' ? input.sound : base.sound,
+    volume: typeof input.volume === 'number' ? input.volume : base.volume,
+    chimeWithOsToast: typeof input.chimeWithOsToast === 'boolean' ? input.chimeWithOsToast : base.chimeWithOsToast,
+    revealOnClick: typeof input.revealOnClick === 'boolean' ? input.revealOnClick : base.revealOnClick,
+    notifyWhileViewing: VIEWING_MODES.has(input.notifyWhileViewing) ? input.notifyWhileViewing : base.notifyWhileViewing,
+    osToast: OS_TOAST_MODES.has(input.osToast) ? input.osToast : base.osToast,
+    turnDoneMinDurationMs:
+      typeof input.turnDoneMinDurationMs === 'number' ? input.turnDoneMinDurationMs : base.turnDoneMinDurationMs,
+    quietHours: typeof input.quietHours === 'string' ? input.quietHours : base.quietHours,
+  }
+  return resolveConfig(merged)
+}
+
+/**
+ * Bump the wall clock, so a page's cursor never collides with a sequence from a
+ * previous Host run. Exported for tests.
+ */
+export function seedSeq() {
+  return Date.now()
+}
+
 /**
  * Which entries a read-mark request flips. Explicit seqs, everything belonging
  * to one session, or the whole history — the caller decides, this only resolves.

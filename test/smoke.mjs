@@ -17,6 +17,7 @@ import {
   DEFAULT_CONFIG,
   EVENT_KINDS,
   RingBuffer,
+  applyConfigPatch,
   buildRevealScript,
   buildToastScript,
   buildToastXml,
@@ -298,6 +299,43 @@ test('RingBuffer can be seeded with a clock value so restarts stay monotonic', (
   // A page that remembered a smaller cursor still sees the entry.
   assert.deepEqual(seeded.since(10).map((item) => item.kind), ['a'])
   assert.deepEqual(new RingBuffer(5, Number.NaN).push({ kind: 'b' }).seq, 1)
+})
+
+test('applyConfigPatch merges, validates and returns a complete config', () => {
+  const base = resolveConfig({ events: { approval: false } })
+  const next = applyConfigPatch(base, {
+    events: { question: false },
+    volume: 2,
+    osToast: 'bogus',
+    notifyWhileViewing: 'never',
+    quietHours: '23:00-8:00',
+    turnDoneMinDurationMs: -100,
+  })
+  assert.equal(next.events.approval, false, 'untouched toggles survive the patch')
+  assert.equal(next.events.question, false)
+  assert.equal(next.volume, 1, 'out-of-range volume is clamped')
+  assert.equal(next.osToast, 'auto', 'unknown enum falls back')
+  assert.equal(next.notifyWhileViewing, 'never')
+  assert.equal(next.quietHours, '23:00-08:00', 'quiet hours are normalized')
+  assert.equal(next.turnDoneMinDurationMs, 0, 'negative threshold is clamped')
+  for (const key of [
+    'events',
+    'turnDoneMinDurationMs',
+    'quietHours',
+    'dedupeWindowMs',
+    'osToast',
+    'sound',
+    'volume',
+    'chimeWithOsToast',
+    'notifyWhileViewing',
+    'revealOnClick',
+    'toastAppId',
+    'toastDurationMs',
+    'historyLimit',
+    'maxTextLength',
+  ]) {
+    assert.ok(key in next, `the persisted config must stay complete, missing ${key}`)
+  }
 })
 
 test('RingBuffer numbers entries and reports incremental reads', () => {

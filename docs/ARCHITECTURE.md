@@ -61,6 +61,7 @@
 | POST | `/dsh-feedback-hub/reveal` | 点击通知时把窗口拉回前台并聚焦；返回走了哪条策略 | 同上 |
 | POST | `/dsh-feedback-hub/read` | 标记已读：`{ seqs }` / `{ sessionId }` / `{ all: true }`，返回实际变更的 seq | 同上 |
 | POST | `/dsh-feedback-hub/clear` | 清空历史（从 Host 内存删除） | 同上 |
+| POST | `/dsh-feedback-hub/config` | 设置页保存：`{ patch }`，经 `configEditor` 写回 profile 覆盖层，行随即重载 | 同上 |
 
 要求自定义请求头是为了让浏览器**强制跨域预检**：别的网页无法在用户不知情时触发我们的 POST。
 
@@ -75,6 +76,27 @@
 ```
 
 页面的“在线”有 60s 有效期：`presence` 停止上报后自动失效，避免页面卡死时再也收不到通知。
+
+## 设置页改配置怎么落地
+
+插件不自己改 profile 的 `cordis.patch.yml`（那是用户文件，里面有别人的行与注释），
+而是走 DSH 的配置编辑服务：
+
+```js
+const editor = ctx.get('configEditor')
+const entry = ctx.fiber.entry
+await editor.edit(entry, () => nextCompleteConfig)
+```
+
+- 写入位置：**profile 的 `cordis.patch.yml`** 里生成同 id 覆盖行 —— 与本插件自带的
+  patch 相比，用户层优先级更高，所以这是“持久化”；
+- 写入内容：`applyConfigPatch()` 产出的**完整 config**（校验 + 补齐默认值），
+  这样以后改默认值不会悄悄改变用户已保存的语义；
+- 生效机制：普通字段变更会让 Loader **重载该行** —— 这正是新配置生效的方式，
+  代价是 Host 内存历史清空、SSE 断开；客户端的看门狗会自动重连，
+  保存后 UI 也会主动重新拉快照；
+- 失败处理：编辑器不可用 / 行不可寻址 / 被上层覆盖时返回 `ok:false` 与原因，
+  页面直接展示，不假装保存成功。
 
 ## 序号为什么用时间戳播种
 

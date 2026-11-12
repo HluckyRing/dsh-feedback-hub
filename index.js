@@ -19,12 +19,14 @@ import path from 'node:path'
 
 import {
   RingBuffer,
+  applyConfigPatch,
   buildRevealScript,
   buildToastScript,
   buildToastXml,
   collectReadTargets,
   formatDuration,
   resolveConfig,
+  seedSeq,
   shouldDeliver,
   truncate,
 } from './core.js'
@@ -133,7 +135,7 @@ class FeedbackHub {
     this.settings = settings
     // Seed the sequence with the clock: a page keeps its cursor in memory, so a
     // restart must never hand out numbers the page has already seen.
-    this.buffer = new RingBuffer(settings.historyLimit, Date.now())
+    this.buffer = new RingBuffer(settings.historyLimit, seedSeq())
     this.seen = new Map()
     this.subscribers = new Set()
     this.presence = new Map()
@@ -675,6 +677,48 @@ class FeedbackHub {
     }
   }
 
+  /** The subset of config the page needs, in a shape safe to send over HTTP. */
+  publicConfig(settings = this.settings) {
+    return {
+      events: settings.events,
+      turnDoneMinDurationMs: settings.turnDoneMinDurationMs,
+      quietHours: settings.quietHours,
+      dedupeWindowMs: settings.dedupeWindowMs,
+      osToast: settings.osToast,
+      sound: settings.sound,
+      volume: settings.volume,
+      chimeWithOsToast: settings.chimeWithOsToast,
+      notifyWhileViewing: settings.notifyWhileViewing,
+      revealOnClick: settings.revealOnClick,
+      toastDurationMs: settings.toastDurationMs,
+      historyLimit: settings.historyLimit,
+    }
+  }
+
+  /**
+   * Persist a settings-page change through the config editor.
+   *
+   * The Loader restarts the row after an ordinary field changes, which is
+   * exactly what makes the new values take effect — the page sees the stream
+   * drop and reconnects with its watchdog.
+   * @param {unknown} patch
+   */
+  async applyConfig(patch) {
+    const editor = this.ctx.get('configEditor')
+    const entry = this.ctx.fiber?.entry
+    if (editor === undefined || typeof editor.edit !== 'function') {
+      return { ok: false, reason: 'config-editor-unavailable' }
+    }
+    if (entry === undefined) return { ok: false, reason: 'entry-unavailable' }
+    const next = applyConfigPatch(this.settings, patch)
+    try {
+      await editor.edit(entry, () => next)
+    } catch (error) {
+      return { ok: false, reason: 'rejected', message: messageOf(error) }
+    }
+    return { ok: true, config: next }
+  }
+
   // ----------------------------------------------------------------- routes
 
   /** @param {any} scoped */
@@ -688,6 +732,7 @@ class FeedbackHub {
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/reveal`, handler: (req, res) => this.handleReveal(req, res) }),
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/read`, handler: (req, res) => this.handleRead(req, res) }),
       scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/clear`, handler: (req, res) => this.handleClear(req, res) }),
+      scoped.webServer.register({ kind: 'exact', path: `${ROUTE_PREFIX}/config`, handler: (req, res) => this.handleConfig(req, res) }),
     ]
     return () => {
       for (const dispose of disposers) dispose()
@@ -736,20 +781,7 @@ class FeedbackHub {
       sightings: this.sightings.slice(-15),
       sessionEvents: Object.fromEntries(this.sessionEvents),
       sseClients: this.subscribers.size,
-      config: {
-        events: this.settings.events,
-        turnDoneMinDurationMs: this.settings.turnDoneMinDurationMs,
-        quietHours: this.settings.quietHours,
-        dedupeWindowMs: this.settings.dedupeWindowMs,
-        osToast: this.settings.osToast,
-        sound: this.settings.sound,
-        volume: this.settings.volume,
-        chimeWithOsToast: this.settings.chimeWithOsToast,
-        notifyWhileViewing: this.settings.notifyWhileViewing,
-        revealOnClick: this.settings.revealOnClick,
-        toastDurationMs: this.settings.toastDurationMs,
-        historyLimit: this.settings.historyLimit,
-      },
+      config: this.publicConfig(),
     })
   }
 
@@ -853,6 +885,31 @@ class FeedbackHub {
     }
     const cleared = this.clearHistory()
     sendJson(res, 200, { ok: true, cleared })
+  }
+
+  /**
+   * Persist a settings-page edit. Body: `{ patch: { ... } }` or the patch itself.
+   * The row restarts, so the response carries the next config for the page to
+   * show immediately, before the stream reconnects.
+   */
+  async handleConfig(req, res) {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'POST only' })
+      return
+    }
+    if (req.headers['x-dsh-feedback-hub'] !== '1') {
+      sendJson(res, 403, { ok: false, error: 'missing plugin header' })
+      return
+    }
+    const body = (await readJsonBody(req)) ?? {}
+    const patch = body.patch !== undefined ? body.patch : body
+    const result = await this.applyConfig(patch)
+    sendJson(res, 200, {
+      ok: result.ok === true,
+      reason: result.reason,
+      message: result.message,
+      config: this.publicConfig(result.config ?? this.settings),
+    })
   }
 }
 

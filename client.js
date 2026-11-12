@@ -59,6 +59,26 @@ window.__ModuleLoader__.load({
         'settings.value.client': '仅页面',
         'settings.events.title': '触发事件',
         'settings.events.hint': '这些开关来自插件配置（cordis.patch.yml），改完重载插件生效。',
+        'settings.edit.title': '通知行为',
+        'settings.edit.hint': '在这里改会写回配置（profile 的 cordis.patch.yml），保存后插件会重载一次，历史会清空。',
+        'settings.edit.save': '保存并重载',
+        'settings.edit.reset': '放弃更改',
+        'settings.edit.saving': '保存中…',
+        'settings.edit.saved': '已保存，插件正在重载…',
+        'settings.edit.failed': '保存失败：{reason}',
+        'settings.edit.volume': '提示音音量',
+        'settings.edit.osToast': '系统通知由谁弹',
+        'settings.edit.viewing': '你正看着该会话时',
+        'settings.edit.threshold': '完成通知门限',
+        'settings.edit.quiet': '静音时段',
+        'settings.edit.quietPlaceholder': '例如 23:00-08:00（留空关闭）',
+        'settings.edit.reveal': '点击通知唤起窗口',
+        'settings.edit.chimeWithOsToast': '系统通知之外再响一次应用内音',
+        'settings.threshold.every': '每轮都提醒',
+        'settings.threshold.minute': '60 秒以上',
+        'settings.threshold.five': '5 分钟以上',
+        'settings.value.never': '只标已读，不打扰',
+        'settings.value.important': '仍提醒授权/提问',
         'settings.test.title': '测试',
         'settings.test.hint': '点一下应当立刻看到浮窗和提示音；窗口失焦时会弹系统通知。',
         'settings.test.send': '测试',
@@ -122,6 +142,26 @@ window.__ModuleLoader__.load({
         'settings.value.client': 'page only',
         'settings.events.title': 'Triggers',
         'settings.events.hint': 'These toggles come from the plugin config (cordis.patch.yml); reload the plugin after editing.',
+        'settings.edit.title': 'Behaviour',
+        'settings.edit.hint': 'Saving writes back to the config (the profile cordis.patch.yml). The plugin restarts once and its history is cleared.',
+        'settings.edit.save': 'Save and reload',
+        'settings.edit.reset': 'Discard changes',
+        'settings.edit.saving': 'Saving…',
+        'settings.edit.saved': 'Saved. The plugin is restarting…',
+        'settings.edit.failed': 'Save failed: {reason}',
+        'settings.edit.volume': 'Chime volume',
+        'settings.edit.osToast': 'Who raises the OS toast',
+        'settings.edit.viewing': 'While you are viewing that session',
+        'settings.edit.threshold': 'Finished-turn threshold',
+        'settings.edit.quiet': 'Quiet hours',
+        'settings.edit.quietPlaceholder': 'e.g. 23:00-08:00 (empty disables)',
+        'settings.edit.reveal': 'Reveal the window on click',
+        'settings.edit.chimeWithOsToast': 'Also play the chime beside the OS toast',
+        'settings.threshold.every': 'Every turn',
+        'settings.threshold.minute': 'After 60 s',
+        'settings.threshold.five': 'After 5 min',
+        'settings.value.never': 'Mark read only',
+        'settings.value.important': 'Still alert for approval/question',
         'settings.test.title': 'Test',
         'settings.test.hint': 'You should see a toast and hear a chime immediately; an OS notification appears while the window is unfocused.',
         'settings.test.send': 'Test',
@@ -820,6 +860,18 @@ window.__ModuleLoader__.load({
 .dfh-chip__value{font-weight:600}
 .dfh-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .dfh-history{display:flex;flex-direction:column;gap:2px;margin-top:8px;max-height:260px;overflow:auto}
+.dfh-field{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 2px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12.5px}
+.dfh-field:last-child{border-bottom:0}
+.dfh-field__label{color:var(--dsw-alias-label-secondary)}
+.dfh-switch{position:relative;flex:none;width:34px;height:18px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);cursor:pointer;padding:0;transition:background .12s ease}
+.dfh-switch[data-on="true"]{background:var(--dsw-alias-brand-primary);border-color:transparent}
+.dfh-switch::after{content:'';position:absolute;top:1px;left:1px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .12s ease}
+.dfh-switch[data-on="true"]::after{transform:translateX(16px)}
+.dfh-select,.dfh-input{appearance:none;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);border-radius:7px;padding:4px 8px;font-size:12px;min-width:118px}
+.dfh-range{width:130px}
+.dfh-status{font-size:11.5px;margin-top:8px;color:var(--dsw-alias-label-secondary)}
+.dfh-status[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
+.dfh-status[data-tone="saved"]{color:var(--dsw-alias-state-success-primary)}
 `
 
     function Styles() {
@@ -1095,6 +1147,236 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function Toggle({ label, on, onChange }) {
+      return h(
+        'div',
+        { className: 'dfh-field' },
+        h('span', { className: 'dfh-field__label' }, label),
+        h('button', {
+          type: 'button',
+          className: 'dfh-switch',
+          role: 'switch',
+          'aria-checked': on === true,
+          'aria-label': label,
+          'data-on': on === true ? 'true' : 'false',
+          onClick: () => onChange(on !== true),
+        }),
+      )
+    }
+
+    function SelectField({ label, value, options, onChange }) {
+      return h(
+        'div',
+        { className: 'dfh-field' },
+        h('span', { className: 'dfh-field__label' }, label),
+        h(
+          'select',
+          { className: 'dfh-select', value, onChange: (event) => onChange(event.target.value) },
+          options.map((option) => h('option', { key: String(option.value), value: String(option.value) }, option.label)),
+        ),
+      )
+    }
+
+    function RangeField({ label, value, min, max, step, onChange, format }) {
+      return h(
+        'div',
+        { className: 'dfh-field' },
+        h('span', { className: 'dfh-field__label' }, `${label} · ${format(value)}`),
+        h('input', {
+          className: 'dfh-range',
+          type: 'range',
+          min,
+          max,
+          step,
+          value,
+          onChange: (event) => onChange(Number(event.target.value)),
+        }),
+      )
+    }
+
+    function TextField({ label, value, placeholder, onChange }) {
+      return h(
+        'div',
+        { className: 'dfh-field' },
+        h('span', { className: 'dfh-field__label' }, label),
+        h('input', {
+          className: 'dfh-input',
+          type: 'text',
+          value,
+          placeholder,
+          onChange: (event) => onChange(event.target.value),
+        }),
+      )
+    }
+
+    /**
+     * Editable copy of the plugin config. Saves through `POST /config`, which
+     * makes the Host persist the patch with its config editor; the row restarts,
+     * so the panel then waits for the stream to come back and re-reads it.
+     */
+    function ConfigPanel({ store, text, link }) {
+      const state = useStore(store)
+      const config = state.config
+      const [draft, setDraft] = React.useState(undefined)
+      const [status, setStatus] = React.useState('idle')
+      const [reason, setReason] = React.useState('')
+
+      React.useEffect(() => {
+        if (config === undefined) return
+        setDraft({ ...config, events: { ...config.events } })
+        setStatus('idle')
+      }, [config])
+
+      if (config === undefined || draft === undefined) return null
+
+      const dirty = JSON.stringify(draft) !== JSON.stringify(config)
+      const setField = (field, value) => setDraft((current) => ({ ...current, [field]: value }))
+      const setEvent = (kind, value) =>
+        setDraft((current) => ({ ...current, events: { ...current.events, [kind]: value } }))
+
+      const threshold = typeof draft.turnDoneMinDurationMs === 'number' ? draft.turnDoneMinDurationMs : 0
+      const known = [0, 60_000, 300_000]
+      const thresholdValues = known.includes(threshold) ? known : [...known, threshold].sort((a, b) => a - b)
+      const thresholdLabel = (value) => {
+        if (value === 0) return text.t('settings.threshold.every')
+        if (value === 60_000) return text.t('settings.threshold.minute')
+        if (value === 300_000) return text.t('settings.threshold.five')
+        return `${Math.round(value / 1000)}s`
+      }
+
+      const save = async () => {
+        setStatus('saving')
+        setReason('')
+        const patch = { ...draft }
+        let result
+        try {
+          result = await link.post('/dsh-feedback-hub/config', { patch })
+        } catch {
+          // The row restarts as the change lands, so the response may never
+          // arrive; the resync below decides whether it actually worked.
+          result = undefined
+        }
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 600))
+          link.ensureConnected()
+          await link.refresh()
+          if (store.state.connected && store.state.config !== undefined) break
+        }
+        if (result !== undefined && result.ok === false) {
+          setStatus('error')
+          setReason(String(result.reason ?? 'unknown'))
+          return
+        }
+        setStatus('saved')
+      }
+
+      return h(
+        'div',
+        { className: 'dfh-card' },
+        h('h3', null, text.t('settings.edit.title')),
+        h('p', null, text.t('settings.edit.hint')),
+        h(
+          'div',
+          { style: { marginTop: 8 } },
+          ['approval', 'question', 'turn-done', 'error', 'subagent-end', 'workflow-end'].map((kind) =>
+            h(Toggle, {
+              key: kind,
+              label: kindLabel(text.t, kind),
+              on: draft.events?.[kind] === true,
+              onChange: (value) => setEvent(kind, value),
+            }),
+          ),
+          h(Toggle, {
+            label: text.t('settings.channel.sound'),
+            on: draft.sound !== false,
+            onChange: (value) => setField('sound', value),
+          }),
+          h(RangeField, {
+            label: text.t('settings.edit.volume'),
+            value: typeof draft.volume === 'number' ? draft.volume : 0.6,
+            min: 0.05,
+            max: 1,
+            step: 0.05,
+            onChange: (value) => setField('volume', value),
+            format: (value) => `${Math.round(value * 100)}%`,
+          }),
+          h(SelectField, {
+            label: text.t('settings.edit.osToast'),
+            value: draft.osToast,
+            options: [
+              { value: 'auto', label: text.t('settings.value.auto') },
+              { value: 'client', label: text.t('settings.value.client') },
+              { value: 'host', label: text.t('settings.value.host') },
+              { value: 'off', label: text.t('settings.value.off') },
+            ],
+            onChange: (value) => setField('osToast', value),
+          }),
+          h(Toggle, {
+            label: text.t('settings.edit.chimeWithOsToast'),
+            on: draft.chimeWithOsToast === true,
+            onChange: (value) => setField('chimeWithOsToast', value),
+          }),
+          h(SelectField, {
+            label: text.t('settings.edit.viewing'),
+            value: draft.notifyWhileViewing ?? 'important',
+            options: [
+              { value: 'important', label: text.t('settings.value.important') },
+              { value: 'never', label: text.t('settings.value.never') },
+            ],
+            onChange: (value) => setField('notifyWhileViewing', value),
+          }),
+          h(SelectField, {
+            label: text.t('settings.edit.threshold'),
+            value: String(threshold),
+            options: thresholdValues.map((value) => ({ value, label: thresholdLabel(value) })),
+            onChange: (value) => setField('turnDoneMinDurationMs', Number(value)),
+          }),
+          h(TextField, {
+            label: text.t('settings.edit.quiet'),
+            value: draft.quietHours ?? '',
+            placeholder: text.t('settings.edit.quietPlaceholder'),
+            onChange: (value) => setField('quietHours', value),
+          }),
+          h(Toggle, {
+            label: text.t('settings.edit.reveal'),
+            on: draft.revealOnClick !== false,
+            onChange: (value) => setField('revealOnClick', value),
+          }),
+        ),
+        h(
+          'div',
+          { className: 'dfh-actions' },
+          h(
+            'button',
+            {
+              className: 'dfh-btn dfh-btn--primary',
+              type: 'button',
+              disabled: dirty !== true || status === 'saving',
+              onClick: () => void save(),
+            },
+            status === 'saving' ? text.t('settings.edit.saving') : text.t('settings.edit.save'),
+          ),
+          h(
+            'button',
+            {
+              className: 'dfh-btn',
+              type: 'button',
+              disabled: dirty !== true || status === 'saving',
+              onClick: () => {
+                setDraft({ ...config, events: { ...config.events } })
+                setStatus('idle')
+              },
+            },
+            text.t('settings.edit.reset'),
+          ),
+        ),
+        status === 'saved' ? h('div', { className: 'dfh-status', 'data-tone': 'saved' }, text.t('settings.edit.saved')) : null,
+        status === 'error'
+          ? h('div', { className: 'dfh-status', 'data-tone': 'error' }, text.t('settings.edit.failed', { reason }))
+          : null,
+      )
+    }
+
     function Settings({ store, text, link, notifier, jump, chime, markRead, clearAll }) {
       const state = useStore(store)
       const [busy, setBusy] = React.useState(false)
@@ -1190,24 +1472,7 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h(
-          'div',
-          { className: 'dfh-card' },
-          h('h3', null, text.t('settings.events.title')),
-          h('p', null, text.t('settings.events.hint')),
-          h(
-            'div',
-            { className: 'dfh-grid' },
-            ['approval', 'question', 'turn-done', 'error', 'subagent-end', 'workflow-end'].map((kind) =>
-              h(Chip, {
-                key: kind,
-                label: kindLabel(text.t, kind),
-                value: config?.events?.[kind] === true ? text.t('settings.value.on') : text.t('settings.value.off'),
-              }),
-            ),
-          ),
-          config !== undefined && config.quietHours ? h('p', { style: { marginTop: 10 } }, `quietHours: ${config.quietHours}`) : null,
-        ),
+        h(ConfigPanel, { store, text, link }),
         h(
           'div',
           { className: 'dfh-card' },
