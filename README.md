@@ -4,7 +4,8 @@
 > 系统通知（Windows）/ 应用内浮窗 / 侧边栏铃铛未读数 / 提示音，四条反馈通道自动协同，窗口最小化或隐藏到托盘时照样收得到。
 
 [![license: MIT](https://img.shields.io/badge/license-MIT-4F7CFF.svg)](LICENSE)
-[![dsh plugin](https://img.shields.io/badge/dsh-plugin-0.1.0-F5A524.svg)](https://github.com/HluckyRing/dsh-feedback-hub)
+[![dsh plugin](https://img.shields.io/badge/dsh-plugin-0.4.0-F5A524.svg)](https://github.com/HluckyRing/dsh-feedback-hub)
+[![tests](https://img.shields.io/badge/tests-35%20passed-2ea44f.svg)](test/smoke.mjs)
 
 ---
 
