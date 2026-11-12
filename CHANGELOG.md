@@ -4,6 +4,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 风格，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-12
+
+### 新增
+- **设置页就地改配置**：新增「通知行为」卡片，可直接调整事件开关、提示音开关与音量、
+  系统通知归属（auto/client/host/off）、是否在系统通知外叠音、看会话时的策略、
+  完成通知门限、静音时段、点击唤起窗口；「保存并重载」写回配置并让该行重载。
+- Host 新增 `POST /config`：经 DSH 的 `configEditor` 把**完整 config** 写入 profile 的
+  `cordis.patch.yml` 覆盖行（不手改用户文件）；编辑器不可用/被上层覆盖时返回原因，
+  页面照实展示。
+- `core.js` 新增 `applyConfigPatch()` 纯函数：合并 + 校验 + 补齐默认值，返回可直接落盘的完整配置。
+- 保存后客户端主动重连并重读快照，无需手动刷新；状态提示区分「保存中 / 已保存 / 失败」。
+
+### 变更
+- `/snapshot` 的 `config` 统一由 `publicConfig()` 产出，与 `/config` 响应同构。
+- 测试补到 35 项（配置补丁合并、越界钳制、完整字段检查）。
+
 ## [0.3.3] - 2026-11-07
 
 ### 变更
@@ -106,6 +122,7 @@
 - 设置页「通知中心」：通道状态 + 发送测试通知
 - 静音时段、去重窗口、完成通知最短时长阈值
 
+[0.4.0]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.4.0
 [0.3.3]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.3
 [0.3.2]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.2
 [0.3.1]: https://github.com/HluckyRing/dsh-feedback-hub/releases/tag/v0.3.1
